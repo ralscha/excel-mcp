@@ -1,0 +1,79 @@
+version: '3'
+
+tasks:
+  default:
+    desc: List all available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  tidy:
+    desc: Tidy Go module dependencies
+    cmds:
+      - go mod tidy
+
+  build:
+    desc: Build excel MCP
+    cmds:
+      - go build -o bin/excel-mcp{{exeExt}} ./cmd/excel-mcp
+
+  run:stdio:
+    desc: Run the MCP server over stdio
+    cmds:
+      - go run ./cmd/excel-mcp stdio
+
+  run:cli:list-tools:
+    desc: List CLI tool names and descriptions
+    cmds:
+      - go run ./cmd/excel-mcp cli list-tools
+
+  run:cli:list-tools:json:
+    desc: List CLI tool metadata as JSON for agent discovery
+    cmds:
+      - go run ./cmd/excel-mcp cli list-tools --json
+
+  run:cli:tool-info:
+    desc: "Show text CLI metadata for one tool. Usage: task run:cli:tool-info TOOL=create_workbook"
+    requires:
+      vars: [TOOL]
+    cmds:
+      - go run ./cmd/excel-mcp cli tool-info {{.TOOL}}
+
+  run:cli:tool-info:json:
+    desc: "Show JSON CLI metadata for one tool. Usage: task run:cli:tool-info:json TOOL=create_workbook"
+    requires:
+      vars: [TOOL]
+    cmds:
+      - go run ./cmd/excel-mcp cli tool-info --json {{.TOOL}}
+
+  run:http:
+    desc: Run the MCP server over streamable HTTP
+    cmds:
+      - go run ./cmd/excel-mcp streamable-http
+
+  test:race:
+    desc: Run tests with the race detector
+    cmds:
+      - go test -race ./...
+
+  format:
+    desc: Format all Go source files
+    cmds:
+      - go fix ./...
+      - go fmt ./...
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  lint:
+    desc: Run golangci-lint in a Docker container
+    cmds:
+      - docker run --rm -v {{toSlash .ROOT_DIR}}:/app -w /app golangci/golangci-lint:v2.11.4 golangci-lint run -v --timeout 5m
+      
+  release:
+    cmds:
+      - git tag -a v1.0.0 -m "Initial release"
+      - git push origin v1.0.0
+      - goreleaser release      
