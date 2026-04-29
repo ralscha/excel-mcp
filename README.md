@@ -1,5 +1,10 @@
 # Excel MCP Server
 
+## Status
+
+[![Test](https://github.com/ralscha/excel-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/ralscha/excel-mcp/actions/workflows/test.yml)
+[![Release](https://github.com/ralscha/excel-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/ralscha/excel-mcp/actions/workflows/release.yml)
+
 Excel MCP Server is a Go MCP server and CLI tool for creating and editing Excel workbooks with [`github.com/xuri/excelize/v2`](https://github.com/qax-os/excelize).
 
 It exposes a series of tools to inspect and manipulate Excel workbooks.
