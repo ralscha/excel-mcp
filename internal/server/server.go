@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 
 	"excel-mcp/internal/excel"
 
@@ -190,6 +191,13 @@ type rangeArgs struct {
 	SheetName string `json:"sheet_name" jsonschema:"Name of the worksheet"`
 	StartCell string `json:"start_cell" jsonschema:"Start cell"`
 	EndCell   string `json:"end_cell" jsonschema:"End cell"`
+}
+
+type optionalEndRangeArgs struct {
+	Filepath  string `json:"filepath" jsonschema:"Path to the Excel workbook"`
+	SheetName string `json:"sheet_name" jsonschema:"Name of the worksheet"`
+	StartCell string `json:"start_cell" jsonschema:"Start cell"`
+	EndCell   string `json:"end_cell,omitempty" jsonschema:"Optional end cell; defaults to start_cell"`
 }
 
 type formatRangeArgs struct {
@@ -437,7 +445,7 @@ type deleteRangeArgs struct {
 	Filepath       string `json:"filepath" jsonschema:"Path to the Excel workbook"`
 	SheetName      string `json:"sheet_name" jsonschema:"Name of the worksheet"`
 	StartCell      string `json:"start_cell" jsonschema:"Top-left cell of the range to delete"`
-	EndCell        string `json:"end_cell" jsonschema:"Bottom-right cell of the range to delete"`
+	EndCell        string `json:"end_cell,omitempty" jsonschema:"Optional bottom-right cell of the range to delete; defaults to start_cell"`
 	ShiftDirection string `json:"shift_direction,omitempty" jsonschema:"Direction to shift remaining cells: up (default) or left"`
 }
 
@@ -916,26 +924,28 @@ func (tc *toolContext) deleteRange(_ context.Context, _ *mcp.CallToolRequest, ar
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	message, err := excel.DeleteRange(path, args.SheetName, args.StartCell, args.EndCell, args.ShiftDirection)
+	endCell := defaultEndCell(args.StartCell, args.EndCell)
+	message, err := excel.DeleteRange(path, args.SheetName, args.StartCell, endCell, args.ShiftDirection)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
 	return textResult(message), nil, nil
 }
 
-func (tc *toolContext) clearRange(_ context.Context, _ *mcp.CallToolRequest, args rangeArgs) (*mcp.CallToolResult, any, error) {
+func (tc *toolContext) clearRange(_ context.Context, _ *mcp.CallToolRequest, args optionalEndRangeArgs) (*mcp.CallToolResult, any, error) {
 	path, err := tc.resolve(args.Filepath)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	message, err := excel.ClearRange(path, args.SheetName, args.StartCell, args.EndCell)
+	endCell := defaultEndCell(args.StartCell, args.EndCell)
+	message, err := excel.ClearRange(path, args.SheetName, args.StartCell, endCell)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
 	return textResult(message), nil, nil
 }
 
-func (tc *toolContext) validateExcelRange(_ context.Context, _ *mcp.CallToolRequest, args rangeArgs) (*mcp.CallToolResult, any, error) {
+func (tc *toolContext) validateExcelRange(_ context.Context, _ *mcp.CallToolRequest, args optionalEndRangeArgs) (*mcp.CallToolResult, any, error) {
 	path, err := tc.resolve(args.Filepath)
 	if err != nil {
 		return toolError(err), nil, nil
@@ -968,9 +978,9 @@ func (tc *toolContext) insertRows(_ context.Context, _ *mcp.CallToolRequest, arg
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	count := args.Count
-	if count == 0 {
-		count = 1
+	count, err := positiveCount(args.Count)
+	if err != nil {
+		return toolError(err), nil, nil
 	}
 	message, err := excel.InsertRows(path, args.SheetName, args.StartRow, count)
 	if err != nil {
@@ -984,9 +994,9 @@ func (tc *toolContext) insertColumns(_ context.Context, _ *mcp.CallToolRequest, 
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	count := args.Count
-	if count == 0 {
-		count = 1
+	count, err := positiveCount(args.Count)
+	if err != nil {
+		return toolError(err), nil, nil
 	}
 	message, err := excel.InsertColumns(path, args.SheetName, args.StartCol, count)
 	if err != nil {
@@ -1000,9 +1010,9 @@ func (tc *toolContext) deleteSheetRows(_ context.Context, _ *mcp.CallToolRequest
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	count := args.Count
-	if count == 0 {
-		count = 1
+	count, err := positiveCount(args.Count)
+	if err != nil {
+		return toolError(err), nil, nil
 	}
 	message, err := excel.DeleteSheetRows(path, args.SheetName, args.StartRow, count)
 	if err != nil {
@@ -1016,15 +1026,32 @@ func (tc *toolContext) deleteSheetColumns(_ context.Context, _ *mcp.CallToolRequ
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	count := args.Count
-	if count == 0 {
-		count = 1
+	count, err := positiveCount(args.Count)
+	if err != nil {
+		return toolError(err), nil, nil
 	}
 	message, err := excel.DeleteSheetColumns(path, args.SheetName, args.StartCol, count)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
 	return textResult(message), nil, nil
+}
+
+func defaultEndCell(startCell, endCell string) string {
+	if strings.TrimSpace(endCell) == "" {
+		return startCell
+	}
+	return endCell
+}
+
+func positiveCount(count int) (int, error) {
+	if count == 0 {
+		return 1, nil
+	}
+	if count < 0 {
+		return 0, fmt.Errorf("count must be positive")
+	}
+	return count, nil
 }
 
 func (tc *toolContext) setColumnWidths(_ context.Context, _ *mcp.CallToolRequest, args setColumnWidthsArgs) (*mcp.CallToolResult, any, error) {

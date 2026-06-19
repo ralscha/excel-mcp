@@ -78,6 +78,12 @@ func ReadData(path, sheetName, startCell, endCell string, previewOnly bool) (*Re
 		if err != nil {
 			return nil, fmt.Errorf("invalid end_cell: %w", err)
 		}
+		if endCol < startCol || endRow < startRow {
+			return nil, fmt.Errorf("range end must be below and to the right of start_cell")
+		}
+	} else {
+		endCol = max(endCol, startCol)
+		endRow = max(endRow, startRow)
 	}
 	if previewOnly && endRow-startRow > 10 {
 		endRow = startRow + 10

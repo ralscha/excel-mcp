@@ -56,6 +56,11 @@ tasks:
     cmds:
       - go test -race ./...
 
+  vet:
+    desc: Run Go vet
+    cmds:
+      - go vet ./...
+
   format:
     desc: Format all Go source files
     cmds:

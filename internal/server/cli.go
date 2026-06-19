@@ -77,7 +77,7 @@ func cliToolDefs(cfg Config) map[string]cliToolDef {
 	tc := &toolContext{pathMode: cfg.PathMode, logger: cfg.Logger}
 	return map[string]cliToolDef{
 		"apply_formula":            cliTool("apply_formula", "Apply an Excel formula to a cell", tc.applyFormula, schemaFor[formulaArgs], textExample("Applied formula =SUM(B2:B10) to Summary!B11")),
-		"clear_range":              cliTool("clear_range", "Clear cell values in a range without shifting cells", tc.clearRange, schemaFor[rangeArgs], textExample("Cleared values in Sheet1!A2:D20")),
+		"clear_range":              cliTool("clear_range", "Clear cell values in a range without shifting cells", tc.clearRange, schemaFor[optionalEndRangeArgs], textExample("Cleared values in Sheet1!A2:D20")),
 		"copy_range":               cliTool("copy_range", "Copy a range of cells to another location", tc.copyRange, schemaFor[copyRangeArgs], textExample("Copied range Sheet1!A1:D10 to Archive!A1")),
 		"copy_worksheet":           cliTool("copy_worksheet", "Copy a worksheet within a workbook", tc.copyWorksheet, schemaFor[copyWorksheetArgs], textExample("Copied worksheet Template to Template Copy")),
 		"create_chart":             cliTool("create_chart", "Create a chart in a worksheet", tc.createChart, schemaFor[chartArgs], textExample("Created line chart on Sheet1 anchored at E2")),
@@ -108,7 +108,7 @@ func cliToolDefs(cfg Config) map[string]cliToolDef {
 		"sort_range":               cliTool("sort_range", "Sort a tabular range by one or more columns", tc.sortRange, schemaFor[sortRangeArgs], sortRangeResultExample()),
 		"unmerge_cells":            cliTool("unmerge_cells", "Unmerge a previously merged range of cells", tc.unmergeCells, schemaFor[rangeArgs], textExample("Unmerged cells Summary!A1:C1")),
 		"upsert_rows":              cliTool("upsert_rows", "Update matching table rows or append new rows within a table range", tc.upsertRows, schemaFor[upsertRowsArgs], upsertRowsResultExample()),
-		"validate_excel_range":     cliTool("validate_excel_range", "Validate that a range exists and is properly formatted", tc.validateExcelRange, schemaFor[rangeArgs], textExample("Range Sheet1!A1:D20 is valid")),
+		"validate_excel_range":     cliTool("validate_excel_range", "Validate that a range exists and is properly formatted", tc.validateExcelRange, schemaFor[optionalEndRangeArgs], textExample("Range Sheet1!A1:D20 is valid")),
 		"validate_formula_syntax":  cliTool("validate_formula_syntax", "Validate Excel formula syntax without applying it", tc.validateFormulaSyntax, schemaFor[validateFormulaArgs], textExample("formula syntax looks valid for Summary!B11")),
 		"write_data_to_excel":      cliTool("write_data_to_excel", "Write data to an Excel worksheet", tc.writeDataToExcel, schemaFor[writeDataArgs], textExample("Wrote 25 rows to Orders starting at A1")),
 	}

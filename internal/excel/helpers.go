@@ -120,11 +120,11 @@ func normalizeRangeRef(rangeRef string) (string, string, int, int, int, int, err
 	if len(parts) != 2 {
 		return "", "", 0, 0, 0, 0, fmt.Errorf("range must be like A1:D5")
 	}
-	startCol, startRow, err := excelize.CellNameToCoordinates(parts[0])
+	startCol, startRow, err := excelize.CellNameToCoordinates(strings.TrimSpace(parts[0]))
 	if err != nil {
 		return "", "", 0, 0, 0, 0, err
 	}
-	endCol, endRow, err := excelize.CellNameToCoordinates(parts[1])
+	endCol, endRow, err := excelize.CellNameToCoordinates(strings.TrimSpace(parts[1]))
 	if err != nil {
 		return "", "", 0, 0, 0, 0, err
 	}

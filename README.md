@@ -38,8 +38,8 @@ It exposes a series of tools to inspect and manipulate Excel workbooks.
 - `delete_worksheet`: delete a worksheet from a workbook.
 - `rename_worksheet`: rename a worksheet in a workbook.
 - `copy_range`: copy a range of cells to another location.
-- `delete_range`: delete a range of cells and shift remaining cells.
-- `clear_range`: clear cell values in a range without shifting surrounding cells.
+- `delete_range`: delete a range of cells and shift remaining cells. If `end_cell` is omitted, only `start_cell` is deleted.
+- `clear_range`: clear cell values in a range without shifting surrounding cells. If `end_cell` is omitted, only `start_cell` is cleared.
 - `insert_rows`: insert one or more rows starting at a specified row.
 - `insert_columns`: insert one or more columns starting at a specified column.
 - `delete_sheet_rows`: delete one or more rows starting at a specified row.
@@ -50,7 +50,7 @@ It exposes a series of tools to inspect and manipulate Excel workbooks.
 - `merge_cells`: merge a range of cells.
 - `unmerge_cells`: unmerge a previously merged range of cells.
 - `get_merged_cells`: list merged-cell ranges in a worksheet.
-- `validate_excel_range`: validate that a worksheet range exists and is properly formatted.
+- `validate_excel_range`: validate that a worksheet range or cell reference exists and is properly formatted.
 - `get_data_validation_info`: return data validation rules and metadata for a worksheet.
 - `apply_formula`: apply an Excel formula to a cell.
 - `validate_formula_syntax`: validate Excel formula syntax without applying it.
@@ -190,6 +190,8 @@ EOF
 - `create_table` requires non-empty, unique header cells.
 - `delete_range` supports `up` and `left` shift directions.
 - `clear_range` clears cell values in-place without shifting surrounding cells.
+- `delete_range`, `clear_range`, and `validate_excel_range` allow single-cell calls by omitting `end_cell`.
+- Row and column insert/delete `count` values default to `1` when omitted and must be positive when provided.
 - `format_range` accepts built-in or custom `number_format` values, optional `protection` settings (`locked`, `hidden`), and an optional single `conditional_format` rule with an optional nested style.
 
 ## Example Tool Inputs
@@ -313,5 +315,6 @@ Describe workbook structure with richer metadata:
 ## Validation
 
 ```bash
+go vet ./...
 go test ./...
 ```

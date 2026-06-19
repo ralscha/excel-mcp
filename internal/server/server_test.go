@@ -336,6 +336,91 @@ func TestClearRangePreservesLayout(t *testing.T) {
 	}
 }
 
+func TestSingleCellRangeDefaultsAndReadEmptySheet(t *testing.T) {
+	ctx, clientSession := newTestClient(t)
+	workbook := filepath.Join(t.TempDir(), "single-cell.xlsx")
+
+	createWorkbookFixture(t, workbook, func(f *excelize.File) error {
+		if err := f.SetCellValue("Sheet1", "A1", "Header"); err != nil {
+			return err
+		}
+		if err := f.SetCellValue("Sheet1", "A2", "Value"); err != nil {
+			return err
+		}
+		if _, err := f.NewSheet("Empty"); err != nil {
+			return err
+		}
+		return nil
+	})
+
+	callTool(t, ctx, clientSession, "clear_range", map[string]any{
+		"filepath":   workbook,
+		"sheet_name": "Sheet1",
+		"start_cell": "A2",
+	})
+	callTool(t, ctx, clientSession, "validate_excel_range", map[string]any{
+		"filepath":   workbook,
+		"sheet_name": "Sheet1",
+		"start_cell": "A1",
+	})
+
+	f, err := excelize.OpenFile(workbook)
+	if err != nil {
+		t.Fatalf("open workbook: %v", err)
+	}
+	if got, _ := f.GetCellValue("Sheet1", "A2"); got != "" {
+		t.Fatalf("expected A2 to be cleared, got %q", got)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close workbook after clear check: %v", err)
+	}
+
+	callTool(t, ctx, clientSession, "delete_range", map[string]any{
+		"filepath":        workbook,
+		"sheet_name":      "Sheet1",
+		"start_cell":      "A1",
+		"shift_direction": "up",
+	})
+	f, err = excelize.OpenFile(workbook)
+	if err != nil {
+		t.Fatalf("reopen workbook after delete: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if got, _ := f.GetCellValue("Sheet1", "A1"); got != "" {
+		t.Fatalf("expected A1 to shift up to empty, got %q", got)
+	}
+
+	read := callTool(t, ctx, clientSession, "read_data_from_excel", map[string]any{
+		"filepath":   workbook,
+		"sheet_name": "Empty",
+		"start_cell": "A1",
+	})
+	var payload struct {
+		Range string           `json:"range"`
+		Rows  []map[string]any `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(read), &payload); err != nil {
+		t.Fatalf("unmarshal empty sheet payload: %v\n%s", err, read)
+	}
+	if payload.Range != "A1:A1" || len(payload.Rows) != 0 {
+		t.Fatalf("unexpected empty sheet payload: %+v", payload)
+	}
+
+	assertToolErrorContains(t, ctx, clientSession, "read_data_from_excel", map[string]any{
+		"filepath":   workbook,
+		"sheet_name": "Sheet1",
+		"start_cell": "B2",
+		"end_cell":   "A1",
+	}, "range end must be below and to the right of start_cell")
+
+	assertToolErrorContains(t, ctx, clientSession, "insert_rows", map[string]any{
+		"filepath":   workbook,
+		"sheet_name": "Sheet1",
+		"start_row":  1,
+		"count":      -1,
+	}, "count must be positive")
+}
+
 func TestSortRange(t *testing.T) {
 	ctx, clientSession := newTestClient(t)
 	singleAscWorkbook := filepath.Join(t.TempDir(), "sort-single-asc.xlsx")
@@ -1706,7 +1791,7 @@ func TestToolInputSchemaRequiredFields(t *testing.T) {
 
 	expectedRequired := map[string][]string{
 		"apply_formula":            {"filepath", "sheet_name", "cell", "formula"},
-		"clear_range":              {"filepath", "sheet_name", "start_cell", "end_cell"},
+		"clear_range":              {"filepath", "sheet_name", "start_cell"},
 		"copy_range":               {"filepath", "sheet_name", "source_start", "source_end", "target_start"},
 		"copy_worksheet":           {"filepath", "source_sheet", "target_sheet"},
 		"create_chart":             {"filepath", "sheet_name", "data_range", "chart_type", "target_cell"},
@@ -1714,7 +1799,7 @@ func TestToolInputSchemaRequiredFields(t *testing.T) {
 		"create_table":             {"filepath", "sheet_name", "data_range"},
 		"create_workbook":          {"filepath"},
 		"create_worksheet":         {"filepath", "sheet_name"},
-		"delete_range":             {"filepath", "sheet_name", "start_cell", "end_cell"},
+		"delete_range":             {"filepath", "sheet_name", "start_cell"},
 		"delete_sheet_columns":     {"filepath", "sheet_name", "start_col"},
 		"delete_sheet_rows":        {"filepath", "sheet_name", "start_row"},
 		"delete_worksheet":         {"filepath", "sheet_name"},
@@ -1737,7 +1822,7 @@ func TestToolInputSchemaRequiredFields(t *testing.T) {
 		"sort_range":               {"filepath", "sheet_name", "range", "sort_keys"},
 		"unmerge_cells":            {"filepath", "sheet_name", "start_cell", "end_cell"},
 		"upsert_rows":              {"filepath", "sheet_name", "range", "key_columns", "rows"},
-		"validate_excel_range":     {"filepath", "sheet_name", "start_cell", "end_cell"},
+		"validate_excel_range":     {"filepath", "sheet_name", "start_cell"},
 		"validate_formula_syntax":  {"formula"},
 		"write_data_to_excel":      {"filepath", "sheet_name", "data"},
 	}
