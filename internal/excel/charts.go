@@ -366,13 +366,13 @@ func chartFromRange(sheetName, dataRange, chartType string, opts ChartOptions) (
 	}
 	chart := &excelize.Chart{Type: chartKind, Series: series}
 	if opts.Title != "" {
-		chart.Title = []excelize.RichTextRun{{Text: opts.Title}}
+		chart.Title = excelize.ChartTitle{Paragraph: []excelize.RichTextRun{{Text: opts.Title}}}
 	}
 	if opts.XAxis != "" {
-		chart.XAxis.Title = []excelize.RichTextRun{{Text: opts.XAxis}}
+		chart.XAxis.Title = excelize.ChartTitle{Paragraph: []excelize.RichTextRun{{Text: opts.XAxis}}}
 	}
 	if opts.YAxis != "" {
-		chart.YAxis.Title = []excelize.RichTextRun{{Text: opts.YAxis}}
+		chart.YAxis.Title = excelize.ChartTitle{Paragraph: []excelize.RichTextRun{{Text: opts.YAxis}}}
 	}
 	return chart, nil
 }
