@@ -39,7 +39,7 @@ func main() {
 		}
 		handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 			return server.New(server.Config{PathMode: server.PathModeRooted, Logger: logger})
-		}, nil)
+		}, &mcp.StreamableHTTPOptions{Stateless: true})
 		addr := ":" + port
 		logger.Info("starting streamable HTTP server", "addr", addr, "path", "/mcp")
 		mux := http.NewServeMux()
