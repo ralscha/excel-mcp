@@ -1,6 +1,6 @@
 module excel-mcp
 
-go 1.26.6
+go 1.27.0
 
 require (
 	github.com/google/jsonschema-go v0.4.3
@@ -9,7 +9,7 @@ require (
 )
 
 require (
-	github.com/richardlehane/mscfb v1.0.7 // indirect
+	github.com/richardlehane/mscfb v1.0.8 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
