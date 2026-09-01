@@ -53,7 +53,8 @@ func writeCellSnapshot(f *excelize.File, sheetName, cell string, snapshot cellSn
 			}
 		case excelize.CellTypeUnset:
 			err = f.SetCellDefault(sheetName, cell, snapshot.rawValue)
-		default:
+		case excelize.CellTypeDate, excelize.CellTypeError, excelize.CellTypeFormula,
+			excelize.CellTypeInlineString, excelize.CellTypeSharedString:
 			err = f.SetCellStr(sheetName, cell, snapshot.rawValue)
 		}
 	}
@@ -91,6 +92,8 @@ func readCellJSONValue(f *excelize.File, sheetName, cell string) (any, string, e
 		if err == nil && !math.IsNaN(number) && !math.IsInf(number, 0) {
 			return number, displayValue, nil
 		}
+	case excelize.CellTypeDate, excelize.CellTypeError, excelize.CellTypeFormula,
+		excelize.CellTypeInlineString, excelize.CellTypeSharedString:
 	}
 	return displayValue, displayValue, nil
 }
@@ -129,6 +132,8 @@ func snapshotComparisonValue(snapshot cellSnapshot, displayValue string) string 
 		if _, ok := parseFiniteFloat(snapshot.rawValue); ok {
 			return snapshot.rawValue
 		}
+	case excelize.CellTypeDate, excelize.CellTypeError, excelize.CellTypeFormula,
+		excelize.CellTypeInlineString, excelize.CellTypeSharedString:
 	}
 	return displayValue
 }

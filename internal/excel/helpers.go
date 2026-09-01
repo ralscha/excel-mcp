@@ -251,7 +251,7 @@ func quoteSheetName(sheetName string) string {
 		quote = true
 	}
 	for index, current := range []rune(sheetName) {
-		if !(unicode.IsLetter(current) || current == '_' || current == '.' || (index > 0 && unicode.IsDigit(current))) {
+		if !unicode.IsLetter(current) && current != '_' && current != '.' && (index == 0 || !unicode.IsDigit(current)) {
 			quote = true
 			break
 		}

@@ -278,7 +278,7 @@ func decodeCLIArgs[T any](payload []byte) (T, error) {
 	if err := decoder.Decode(&args); err != nil {
 		return args, fmt.Errorf("decode tool input: %w", err)
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = fmt.Errorf("multiple JSON values are not allowed")
 		}

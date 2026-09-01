@@ -49,13 +49,14 @@ func AddDataValidation(path, sheetName, rangeRef string, opts DataValidationOpti
 			if len(opts.Values) > 0 && strings.TrimSpace(opts.Formula1) != "" {
 				return fmt.Errorf("list validation accepts either values or formula1, not both")
 			}
-			if len(opts.Values) > 0 {
+			switch {
+			case len(opts.Values) > 0:
 				if err := dv.SetDropList(opts.Values); err != nil {
 					return err
 				}
-			} else if strings.TrimSpace(opts.Formula1) != "" {
+			case strings.TrimSpace(opts.Formula1) != "":
 				dv.SetSqrefDropList(opts.Formula1)
-			} else {
+			default:
 				return fmt.Errorf("list validation requires values or formula1")
 			}
 		case "custom":
