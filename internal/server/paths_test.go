@@ -46,7 +46,11 @@ func TestResolvePathRootedRejectsTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := filepath.Join(root, "reports", "q1.xlsx")
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("resolve temporary root: %v", err)
+	}
+	want := filepath.Join(rootReal, "reports", "q1.xlsx")
 	if resolved != want {
 		t.Fatalf("expected %q, got %q", want, resolved)
 	}
