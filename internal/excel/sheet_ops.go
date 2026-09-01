@@ -133,10 +133,10 @@ func CreatePivotTable(path, sheetName, dataRange, targetCell string, opts PivotO
 		if err != nil {
 			return err
 		}
-		pivotRange := fmt.Sprintf("%s!%s:%s%d", sheetName, targetCell, endColName, startRow+max(10, (endDataRow-startDataRow)+6))
+		pivotEndCell := fmt.Sprintf("%s%d", endColName, startRow+max(10, (endDataRow-startDataRow)+6))
 		return f.AddPivotTable(&excelize.PivotTableOptions{
-			DataRange:       fmt.Sprintf("%s!%s:%s", sheetName, startCell, endCell),
-			PivotTableRange: pivotRange,
+			DataRange:       formatSheetRangeRef(sheetName, startCell, endCell),
+			PivotTableRange: formatSheetRangeRef(sheetName, targetCell, pivotEndCell),
 			Rows:            pivotRows,
 			Columns:         pivotCols,
 			Data:            pivotData,
@@ -189,15 +189,22 @@ func CopyRange(path, sheetName, sourceStart, sourceEnd, targetStart, targetSheet
 		if err := ensureSheetExists(f, targetSheet); err != nil {
 			return err
 		}
+		snapshots := make([][]cellSnapshot, endRow-startRow+1)
 		for rowOffset := 0; rowOffset <= endRow-startRow; rowOffset++ {
+			snapshots[rowOffset] = make([]cellSnapshot, endCol-startCol+1)
 			for colOffset := 0; colOffset <= endCol-startCol; colOffset++ {
 				sourceCell, _ := excelize.CoordinatesToCellName(startCol+colOffset, startRow+rowOffset)
-				targetCell, _ := excelize.CoordinatesToCellName(targetCol+colOffset, targetRow+rowOffset)
-				value, err := f.GetCellValue(sheetName, sourceCell)
+				snapshot, err := readCellSnapshot(f, sheetName, sourceCell)
 				if err != nil {
 					return err
 				}
-				if err := f.SetCellValue(targetSheet, targetCell, value); err != nil {
+				snapshots[rowOffset][colOffset] = snapshot
+			}
+		}
+		for rowOffset, row := range snapshots {
+			for colOffset, snapshot := range row {
+				targetCell, _ := excelize.CoordinatesToCellName(targetCol+colOffset, targetRow+rowOffset)
+				if err := writeCellSnapshot(f, targetSheet, targetCell, snapshot, targetCol-startCol, targetRow-startRow); err != nil {
 					return err
 				}
 			}
@@ -226,56 +233,57 @@ func DeleteRange(path, sheetName, startCell, endCell, shiftDirection string) (st
 		if err := ensureSheetExists(f, sheetName); err != nil {
 			return err
 		}
-		rows, err := f.GetRows(sheetName)
+		maxRow, maxCol, _, err := worksheetBounds(f, sheetName)
 		if err != nil {
 			return err
-		}
-		maxRow := len(rows)
-		maxCol := 0
-		for _, row := range rows {
-			if len(row) > maxCol {
-				maxCol = len(row)
-			}
 		}
 		rowSpan := endRow - startRow + 1
 		colSpan := endCol - startCol + 1
 		if shiftDirection == "left" {
-			for row := startRow; row <= endRow; row++ {
-				for col := startCol; col <= maxCol-colSpan; col++ {
-					fromCell, _ := excelize.CoordinatesToCellName(col+colSpan, row)
-					toCell, _ := excelize.CoordinatesToCellName(col, row)
-					value, err := f.GetCellValue(sheetName, fromCell)
+			for row := startRow; row <= min(endRow, maxRow); row++ {
+				snapshots := make([]cellSnapshot, max(0, maxCol-startCol+1))
+				for offset := range snapshots {
+					col := startCol + offset
+					fromCol := col + colSpan
+					if fromCol > maxCol {
+						continue
+					}
+					fromCell, _ := excelize.CoordinatesToCellName(fromCol, row)
+					snapshot, err := readCellSnapshot(f, sheetName, fromCell)
 					if err != nil {
 						return err
 					}
-					if err := f.SetCellValue(sheetName, toCell, value); err != nil {
-						return err
-					}
+					snapshots[offset] = snapshot
 				}
-				for col := maxCol - colSpan + 1; col <= maxCol; col++ {
-					cell, _ := excelize.CoordinatesToCellName(col, row)
-					if err := f.SetCellValue(sheetName, cell, ""); err != nil {
+				for offset, snapshot := range snapshots {
+					col := startCol + offset
+					toCell, _ := excelize.CoordinatesToCellName(col, row)
+					if err := writeCellSnapshot(f, sheetName, toCell, snapshot, -colSpan, 0); err != nil {
 						return err
 					}
 				}
 			}
 			return nil
 		}
-		for col := startCol; col <= endCol; col++ {
-			for row := startRow; row <= maxRow-rowSpan; row++ {
-				fromCell, _ := excelize.CoordinatesToCellName(col, row+rowSpan)
-				toCell, _ := excelize.CoordinatesToCellName(col, row)
-				value, err := f.GetCellValue(sheetName, fromCell)
+		for col := startCol; col <= min(endCol, maxCol); col++ {
+			snapshots := make([]cellSnapshot, max(0, maxRow-startRow+1))
+			for offset := range snapshots {
+				row := startRow + offset
+				fromRow := row + rowSpan
+				if fromRow > maxRow {
+					continue
+				}
+				fromCell, _ := excelize.CoordinatesToCellName(col, fromRow)
+				snapshot, err := readCellSnapshot(f, sheetName, fromCell)
 				if err != nil {
 					return err
 				}
-				if err := f.SetCellValue(sheetName, toCell, value); err != nil {
-					return err
-				}
+				snapshots[offset] = snapshot
 			}
-			for row := maxRow - rowSpan + 1; row <= maxRow; row++ {
-				cell, _ := excelize.CoordinatesToCellName(col, row)
-				if err := f.SetCellValue(sheetName, cell, ""); err != nil {
+			for offset, snapshot := range snapshots {
+				row := startRow + offset
+				toCell, _ := excelize.CoordinatesToCellName(col, row)
+				if err := writeCellSnapshot(f, sheetName, toCell, snapshot, 0, -rowSpan); err != nil {
 					return err
 				}
 			}
@@ -366,6 +374,7 @@ func SortRange(path, sheetName, rangeRef string, opts SortRangeOptions) (*SortRa
 		rows := make([]sortableRangeRow, 0, endRow-dataStartRow+1)
 		for row := dataStartRow; row <= endRow; row++ {
 			values := make([]string, 0, endCol-startCol+1)
+			cells := make([]cellSnapshot, 0, endCol-startCol+1)
 			for col := startCol; col <= endCol; col++ {
 				cell, err := excelize.CoordinatesToCellName(col, row)
 				if err != nil {
@@ -375,9 +384,14 @@ func SortRange(path, sheetName, rangeRef string, opts SortRangeOptions) (*SortRa
 				if err != nil {
 					return err
 				}
-				values = append(values, value)
+				snapshot, err := readCellSnapshot(f, sheetName, cell)
+				if err != nil {
+					return err
+				}
+				values = append(values, snapshotComparisonValue(snapshot, value))
+				cells = append(cells, snapshot)
 			}
-			rows = append(rows, sortableRangeRow{Values: values})
+			rows = append(rows, sortableRangeRow{Values: values, Cells: cells, OriginalRow: row})
 		}
 
 		sort.SliceStable(rows, func(leftIndex, rightIndex int) bool {
@@ -397,12 +411,12 @@ func SortRange(path, sheetName, rangeRef string, opts SortRangeOptions) (*SortRa
 		})
 
 		for rowOffset, row := range rows {
-			for colOffset, value := range row.Values {
+			for colOffset, snapshot := range row.Cells {
 				cell, err := excelize.CoordinatesToCellName(startCol+colOffset, dataStartRow+rowOffset)
 				if err != nil {
 					return err
 				}
-				if err := f.SetCellValue(sheetName, cell, coerceCellValue(value)); err != nil {
+				if err := writeCellSnapshot(f, sheetName, cell, snapshot, 0, dataStartRow+rowOffset-row.OriginalRow); err != nil {
 					return err
 				}
 			}
@@ -423,7 +437,9 @@ func SortRange(path, sheetName, rangeRef string, opts SortRangeOptions) (*SortRa
 }
 
 type sortableRangeRow struct {
-	Values []string
+	Values      []string
+	Cells       []cellSnapshot
+	OriginalRow int
 }
 
 type resolvedSortKey struct {
@@ -470,8 +486,8 @@ func compareSortableValues(left, right string) int {
 	if left == right {
 		return 0
 	}
-	if leftNumber, err := strconv.ParseFloat(left, 64); err == nil {
-		if rightNumber, err := strconv.ParseFloat(right, 64); err == nil {
+	if leftNumber, ok := parseFiniteFloat(left); ok {
+		if rightNumber, ok := parseFiniteFloat(right); ok {
 			switch {
 			case leftNumber < rightNumber:
 				return -1
@@ -506,17 +522,6 @@ func compareSortableValues(left, right string) int {
 		return -1
 	}
 	return 1
-}
-
-func coerceCellValue(value string) any {
-	trimmed := strings.TrimSpace(value)
-	if number, err := strconv.ParseFloat(trimmed, 64); err == nil {
-		return number
-	}
-	if boolean, err := strconv.ParseBool(strings.ToLower(trimmed)); err == nil {
-		return boolean
-	}
-	return value
 }
 
 func UpsertRows(path, sheetName, rangeRef string, opts UpsertRowsOptions) (*UpsertRowsResult, error) {
@@ -636,6 +641,9 @@ func readTableHeaders(f *excelize.File, sheetName string, startCol, startRow, en
 func resolveUpsertKeyIndexes(keyColumns []string, headerIndexes map[string]int) (map[string]int, error) {
 	resolved := make(map[string]int, len(keyColumns))
 	for _, keyColumn := range keyColumns {
+		if _, duplicate := resolved[keyColumn]; duplicate {
+			return nil, fmt.Errorf("key_columns contains duplicate column %q", keyColumn)
+		}
 		index, ok := headerIndexes[keyColumn]
 		if !ok {
 			return nil, fmt.Errorf("key column %q not found in header row", keyColumn)

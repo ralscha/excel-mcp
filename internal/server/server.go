@@ -19,13 +19,15 @@ type Config struct {
 	Logger   *slog.Logger
 }
 
+var Version = "dev"
+
 type toolContext struct {
 	pathMode PathMode
 	logger   *slog.Logger
 }
 
 func New(cfg Config) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "excel-mcp", Version: "0.1.0"}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "excel-mcp", Version: Version}, nil)
 	tc := &toolContext{pathMode: cfg.PathMode, logger: cfg.Logger}
 
 	mcp.AddTool(server, &mcp.Tool{Name: "create_workbook", Description: "Create a new Excel workbook"}, tc.createWorkbook)
@@ -56,6 +58,8 @@ func New(cfg Config) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "delete_range", Description: "Delete a range of cells and shift remaining cells"}, tc.deleteRange)
 	mcp.AddTool(server, &mcp.Tool{Name: "clear_range", Description: "Clear cell values in a range without shifting cells"}, tc.clearRange)
 	mcp.AddTool(server, &mcp.Tool{Name: "validate_excel_range", Description: "Validate that a range exists and is properly formatted"}, tc.validateExcelRange)
+	mcp.AddTool(server, &mcp.Tool{Name: "add_data_validation", Description: "Add a data validation rule to a worksheet range"}, tc.addDataValidation)
+	mcp.AddTool(server, &mcp.Tool{Name: "delete_data_validation", Description: "Delete data validation rules from a worksheet range or sheet"}, tc.deleteDataValidation)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_data_validation_info", Description: "Get data validation rules and metadata for a worksheet"}, tc.getDataValidationInfo)
 	mcp.AddTool(server, &mcp.Tool{Name: "insert_rows", Description: "Insert one or more rows starting at the specified row"}, tc.insertRows)
 	mcp.AddTool(server, &mcp.Tool{Name: "insert_columns", Description: "Insert one or more columns starting at the specified column"}, tc.insertColumns)
@@ -105,8 +109,9 @@ func mustSetColumnWidthsSchema() *jsonschema.Schema {
 	return schema
 }
 
-type fileArgs struct {
-	Filepath string `json:"filepath" jsonschema:"Path to the Excel workbook"`
+type createWorkbookArgs struct {
+	Filepath  string `json:"filepath" jsonschema:"Path to the Excel workbook"`
+	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"Replace an existing workbook when true"`
 }
 
 type createWorksheetArgs struct {
@@ -292,8 +297,14 @@ func parseNumberFormat(value any) (int, string, error) {
 		if typed != math.Trunc(typed) {
 			return 0, "", fmt.Errorf("invalid number_format: numeric values must be integers")
 		}
+		if typed < 0 || typed > 65535 {
+			return 0, "", fmt.Errorf("invalid number_format: numeric values must be between 0 and 65535")
+		}
 		return int(typed), "", nil
 	case int:
+		if typed < 0 || typed > 65535 {
+			return 0, "", fmt.Errorf("invalid number_format: numeric values must be between 0 and 65535")
+		}
 		return typed, "", nil
 	default:
 		return 0, "", fmt.Errorf("invalid number_format: expected integer or string")
@@ -484,6 +495,30 @@ type validationInfoArgs struct {
 	SheetName string `json:"sheet_name" jsonschema:"Name of the worksheet"`
 }
 
+type addDataValidationArgs struct {
+	Filepath     string   `json:"filepath" jsonschema:"Path to the Excel workbook"`
+	SheetName    string   `json:"sheet_name" jsonschema:"Name of the worksheet"`
+	Range        string   `json:"range" jsonschema:"Range to validate, such as C2:C100"`
+	Type         string   `json:"type" jsonschema:"Validation type: list, whole, decimal, date, time, text_length, or custom"`
+	Operator     string   `json:"operator,omitempty" jsonschema:"Comparison operator; defaults to between for non-list validation"`
+	Formula1     string   `json:"formula1,omitempty" jsonschema:"First comparison formula or source range for a list"`
+	Formula2     string   `json:"formula2,omitempty" jsonschema:"Second formula for between and not_between operators"`
+	Values       []string `json:"values,omitempty" jsonschema:"Inline allowed values for list validation"`
+	AllowBlank   bool     `json:"allow_blank,omitempty" jsonschema:"Allow blank cell values"`
+	ShowDropDown bool     `json:"show_drop_down,omitempty" jsonschema:"Show a drop-down control for list validation"`
+	ErrorStyle   string   `json:"error_style,omitempty" jsonschema:"Error style: stop, warning, or information"`
+	ErrorTitle   string   `json:"error_title,omitempty" jsonschema:"Validation error title"`
+	ErrorBody    string   `json:"error_body,omitempty" jsonschema:"Validation error message"`
+	PromptTitle  string   `json:"prompt_title,omitempty" jsonschema:"Input prompt title"`
+	PromptBody   string   `json:"prompt_body,omitempty" jsonschema:"Input prompt message"`
+}
+
+type deleteDataValidationArgs struct {
+	Filepath  string `json:"filepath" jsonschema:"Path to the Excel workbook"`
+	SheetName string `json:"sheet_name" jsonschema:"Name of the worksheet"`
+	Range     string `json:"range,omitempty" jsonschema:"Optional range whose validation rules should be removed; omit to remove all rules from the sheet"`
+}
+
 type rowArgs struct {
 	Filepath  string `json:"filepath" jsonschema:"Path to the Excel workbook"`
 	SheetName string `json:"sheet_name" jsonschema:"Name of the worksheet"`
@@ -498,12 +533,12 @@ type columnArgs struct {
 	Count     int    `json:"count,omitempty" jsonschema:"Number of columns to insert or delete (defaults to 1)"`
 }
 
-func (tc *toolContext) createWorkbook(_ context.Context, _ *mcp.CallToolRequest, args fileArgs) (*mcp.CallToolResult, any, error) {
+func (tc *toolContext) createWorkbook(_ context.Context, _ *mcp.CallToolRequest, args createWorkbookArgs) (*mcp.CallToolResult, any, error) {
 	path, err := tc.resolve(args.Filepath)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
-	message, err := excel.CreateWorkbook(path)
+	message, err := excel.CreateWorkbook(path, args.Overwrite)
 	if err != nil {
 		return toolError(err), nil, nil
 	}
@@ -971,6 +1006,43 @@ func (tc *toolContext) getDataValidationInfo(_ context.Context, _ *mcp.CallToolR
 		return nil, nil, err
 	}
 	return result, nil, nil
+}
+
+func (tc *toolContext) addDataValidation(_ context.Context, _ *mcp.CallToolRequest, args addDataValidationArgs) (*mcp.CallToolResult, any, error) {
+	path, err := tc.resolve(args.Filepath)
+	if err != nil {
+		return toolError(err), nil, nil
+	}
+	message, err := excel.AddDataValidation(path, args.SheetName, args.Range, excel.DataValidationOptions{
+		Type:         args.Type,
+		Operator:     args.Operator,
+		Formula1:     args.Formula1,
+		Formula2:     args.Formula2,
+		Values:       args.Values,
+		AllowBlank:   args.AllowBlank,
+		ShowDropDown: args.ShowDropDown,
+		ErrorStyle:   args.ErrorStyle,
+		ErrorTitle:   args.ErrorTitle,
+		ErrorBody:    args.ErrorBody,
+		PromptTitle:  args.PromptTitle,
+		PromptBody:   args.PromptBody,
+	})
+	if err != nil {
+		return toolError(err), nil, nil
+	}
+	return textResult(message), nil, nil
+}
+
+func (tc *toolContext) deleteDataValidation(_ context.Context, _ *mcp.CallToolRequest, args deleteDataValidationArgs) (*mcp.CallToolResult, any, error) {
+	path, err := tc.resolve(args.Filepath)
+	if err != nil {
+		return toolError(err), nil, nil
+	}
+	message, err := excel.DeleteDataValidation(path, args.SheetName, args.Range)
+	if err != nil {
+		return toolError(err), nil, nil
+	}
+	return textResult(message), nil, nil
 }
 
 func (tc *toolContext) insertRows(_ context.Context, _ *mcp.CallToolRequest, args rowArgs) (*mcp.CallToolResult, any, error) {

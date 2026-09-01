@@ -2,7 +2,9 @@ package excel
 
 import (
 	"fmt"
+	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -188,11 +190,11 @@ func UnmergeCells(path, sheetName, startCell, endCell string) (string, error) {
 }
 
 func GetMergedCells(path, sheetName string) ([]string, error) {
-	f, err := excelize.OpenFile(path)
+	f, closeWorkbook, err := openWorkbook(path)
 	if err != nil {
-		return nil, fmt.Errorf(errFmtOpenWorkbook, err)
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer closeWorkbook()
 	return getMergedCellsFromFile(f, sheetName)
 }
 
@@ -232,6 +234,9 @@ func SetColumnWidths(path, sheetName string, widths []ColumnWidthEntry, autoFit 
 				startCol, startRow, endCol, endRow = 1, 1, cols, rows
 			}
 			maxLens := make(map[int]float64, endCol-startCol+1)
+			for col := startCol; col <= endCol; col++ {
+				maxLens[col] = 0
+			}
 			for row := startRow; row <= endRow; row++ {
 				for col := startCol; col <= endCol; col++ {
 					cell, err := excelize.CoordinatesToCellName(col, row)
@@ -242,7 +247,7 @@ func SetColumnWidths(path, sheetName string, widths []ColumnWidthEntry, autoFit 
 					if err != nil {
 						return err
 					}
-					if l := float64(len(value)); l > maxLens[col] {
+					if l := displayTextWidth(value); l > maxLens[col] {
 						maxLens[col] = l
 					}
 				}
@@ -272,8 +277,8 @@ func SetColumnWidths(path, sheetName string, widths []ColumnWidthEntry, autoFit 
 			if _, _, err := excelize.CellNameToCoordinates(colName + "1"); err != nil {
 				return fmt.Errorf("invalid column %q", entry.Column)
 			}
-			if entry.Width < 0 {
-				return fmt.Errorf("width must be non-negative")
+			if entry.Width < 0 || math.IsNaN(entry.Width) || math.IsInf(entry.Width, 0) {
+				return fmt.Errorf("width must be a finite non-negative number")
 			}
 			if err := f.SetColWidth(sheetName, colName, colName, entry.Width); err != nil {
 				return err
@@ -299,8 +304,8 @@ func SetRowHeights(path, sheetName string, heights []RowHeightEntry) (string, er
 			if entry.Row < 1 {
 				return fmt.Errorf("row must be >= 1")
 			}
-			if entry.Height < 0 {
-				return fmt.Errorf("height must be non-negative")
+			if entry.Height < 0 || math.IsNaN(entry.Height) || math.IsInf(entry.Height, 0) {
+				return fmt.Errorf("height must be a finite non-negative number")
 			}
 			if err := f.SetRowHeight(sheetName, entry.Row, entry.Height); err != nil {
 				return err
@@ -312,4 +317,12 @@ func SetRowHeights(path, sheetName string, heights []RowHeightEntry) (string, er
 		return "", err
 	}
 	return fmt.Sprintf("set %d row height(s) in %s", len(heights), sheetName), nil
+}
+
+func displayTextWidth(value string) float64 {
+	maxWidth := 0
+	for _, line := range strings.Split(value, "\n") {
+		maxWidth = max(maxWidth, utf8.RuneCountInString(strings.TrimSuffix(line, "\r")))
+	}
+	return float64(maxWidth)
 }

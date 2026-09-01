@@ -2,12 +2,22 @@ package excel
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
 )
 
-func CreateWorkbook(path string) (string, error) {
+func CreateWorkbook(path string, overwrite bool) (string, error) {
+	lock := workbookLock(path)
+	lock.Lock()
+	defer lock.Unlock()
+
+	if _, err := os.Stat(path); err == nil && !overwrite {
+		return "", fmt.Errorf("workbook already exists at %s; set overwrite=true to replace it", path)
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("check workbook path: %w", err)
+	}
 	if err := ensureParentDir(path); err != nil {
 		return "", err
 	}
@@ -53,6 +63,12 @@ func CopyWorksheet(path, sourceSheet, targetSheet string) (string, error) {
 
 func DeleteWorksheet(path, sheetName string) (string, error) {
 	err := withWorkbook(path, func(f *excelize.File) error {
+		if err := ensureSheetExists(f, sheetName); err != nil {
+			return err
+		}
+		if len(f.GetSheetList()) == 1 {
+			return fmt.Errorf("cannot delete the workbook's only worksheet")
+		}
 		return f.DeleteSheet(sheetName)
 	})
 	if err != nil {
@@ -75,11 +91,11 @@ func RenameWorksheet(path, oldName, newName string) (string, error) {
 }
 
 func GetWorkbookMetadata(path string, includeRanges bool) (*WorkbookMetadata, error) {
-	f, err := excelize.OpenFile(path)
+	f, closeWorkbook, err := openWorkbook(path)
 	if err != nil {
-		return nil, fmt.Errorf(errFmtOpenWorkbook, err)
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer closeWorkbook()
 
 	metadata := &WorkbookMetadata{FilePath: path}
 	for _, sheet := range f.GetSheetList() {
@@ -99,11 +115,11 @@ func GetWorkbookMetadata(path string, includeRanges bool) (*WorkbookMetadata, er
 }
 
 func DescribeWorkbook(path string, opts DescribeWorkbookOptions) (*WorkbookDescription, error) {
-	f, err := excelize.OpenFile(path)
+	f, closeWorkbook, err := openWorkbook(path)
 	if err != nil {
-		return nil, fmt.Errorf(errFmtOpenWorkbook, err)
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer closeWorkbook()
 
 	description := &WorkbookDescription{FilePath: path}
 	chartMap := map[string][]ChartDescription{}
@@ -175,11 +191,11 @@ func DescribeWorkbook(path string, opts DescribeWorkbookOptions) (*WorkbookDescr
 }
 
 func ListCharts(path, sheetName, sourceSheet string) (*ListChartsResult, error) {
-	f, err := excelize.OpenFile(path)
+	f, closeWorkbook, err := openWorkbook(path)
 	if err != nil {
-		return nil, fmt.Errorf(errFmtOpenWorkbook, err)
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer closeWorkbook()
 	if sheetName != "" {
 		if err := ensureSheetExists(f, sheetName); err != nil {
 			return nil, err
@@ -226,11 +242,14 @@ func chartUsesSourceSheet(chart ChartDescription, sheetName string) bool {
 }
 
 func GetSheetSchema(path, sheetName, startCell, endCell string, opts SheetSchemaOptions) (*SheetSchema, error) {
-	f, err := excelize.OpenFile(path)
-	if err != nil {
-		return nil, fmt.Errorf(errFmtOpenWorkbook, err)
+	if opts.SampleSize < 0 {
+		return nil, fmt.Errorf("sample_size must be non-negative")
 	}
-	defer func() { _ = f.Close() }()
+	f, closeWorkbook, err := openWorkbook(path)
+	if err != nil {
+		return nil, err
+	}
+	defer closeWorkbook()
 
 	if err := ensureSheetExists(f, sheetName); err != nil {
 		return nil, err
@@ -251,8 +270,8 @@ func GetSheetSchema(path, sheetName, startCell, endCell string, opts SheetSchema
 		if err != nil {
 			return nil, err
 		}
-		endCol = cols
-		endRow = rows
+		endCol = max(cols, startCol)
+		endRow = max(rows, startRow)
 	}
 	if endCol < startCol || endRow < startRow {
 		return nil, fmt.Errorf("range end must be below and to the right of start_cell")

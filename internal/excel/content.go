@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -14,6 +15,9 @@ func WriteData(path, sheetName string, data []map[string]any, startCell string) 
 		return "", fmt.Errorf("data is required")
 	}
 	columns := stableColumns(data)
+	if len(columns) == 0 {
+		return "", fmt.Errorf("data rows must contain at least one column")
+	}
 	err := withWorkbook(path, func(f *excelize.File) error {
 		startCol, startRow, err := excelize.CellNameToCoordinates(startCell)
 		if err != nil {
@@ -48,11 +52,11 @@ func WriteData(path, sheetName string, data []map[string]any, startCell string) 
 }
 
 func ReadData(path, sheetName, startCell, endCell string, previewOnly bool) (*ReadResult, error) {
-	f, err := excelize.OpenFile(path)
+	f, closeWorkbook, err := openWorkbook(path)
 	if err != nil {
-		return nil, fmt.Errorf(errFmtOpenWorkbook, err)
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer closeWorkbook()
 
 	startCol, startRow, err := excelize.CellNameToCoordinates(startCell)
 	if err != nil {
@@ -97,6 +101,7 @@ func ReadData(path, sheetName, startCell, endCell string, previewOnly bool) (*Re
 	result.Range = startCell + ":" + rangeEnd
 
 	headers := make([]string, 0, endCol-startCol+1)
+	seenHeaders := make(map[string]struct{}, endCol-startCol+1)
 	for col := startCol; col <= endCol; col++ {
 		cell, err := excelize.CoordinatesToCellName(col, startRow)
 		if err != nil {
@@ -106,10 +111,10 @@ func ReadData(path, sheetName, startCell, endCell string, previewOnly bool) (*Re
 		if err != nil {
 			return nil, err
 		}
-		if value == "" {
-			value = fmt.Sprintf("column_%d", col-startCol+1)
+		headers, err = appendHeader(headers, seenHeaders, value)
+		if err != nil {
+			return nil, err
 		}
-		headers = append(headers, value)
 	}
 
 	for row := startRow + 1; row <= endRow; row++ {
@@ -120,11 +125,11 @@ func ReadData(path, sheetName, startCell, endCell string, previewOnly bool) (*Re
 			if err != nil {
 				return nil, err
 			}
-			value, err := f.GetCellValue(sheetName, cell)
+			value, displayValue, err := readCellJSONValue(f, sheetName, cell)
 			if err != nil {
 				return nil, err
 			}
-			if value != "" {
+			if displayValue != "" {
 				empty = false
 			}
 			item[header] = value
@@ -138,8 +143,11 @@ func ReadData(path, sheetName, startCell, endCell string, previewOnly bool) (*Re
 }
 
 func ApplyFormula(path, sheetName, cell, formula string) (string, error) {
+	if err := ValidateFormulaSyntax(formula); err != nil {
+		return "", err
+	}
 	err := withWorkbook(path, func(f *excelize.File) error {
-		return f.SetCellFormula(sheetName, cell, formula)
+		return f.SetCellFormula(sheetName, cell, strings.TrimPrefix(formula, "="))
 	})
 	if err != nil {
 		return "", err
@@ -151,31 +159,64 @@ func ValidateFormulaSyntax(formula string) error {
 	if !strings.HasPrefix(formula, "=") {
 		return fmt.Errorf("formula must start with '='")
 	}
-	if strings.Count(formula, "(") != strings.Count(formula, ")") {
-		return fmt.Errorf("formula has unbalanced parentheses")
+	if strings.TrimSpace(strings.TrimPrefix(formula, "=")) == "" {
+		return fmt.Errorf("formula expression is required after '='")
 	}
-	if strings.Count(formula, `"`)%2 != 0 {
+	depth := 0
+	inString := false
+	runes := []rune(formula)
+	for index := 1; index < len(runes); index++ {
+		current := runes[index]
+		if current == '"' {
+			if inString && index+1 < len(runes) && runes[index+1] == '"' {
+				index++
+				continue
+			}
+			inString = !inString
+			continue
+		}
+		if unicode.IsControl(current) && current != '\t' && current != '\r' && current != '\n' {
+			return fmt.Errorf("formula contains unsupported control characters")
+		}
+		if inString {
+			continue
+		}
+		switch current {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return fmt.Errorf("formula has unbalanced parentheses")
+			}
+		}
+	}
+	if inString {
 		return fmt.Errorf("formula has unbalanced quotes")
 	}
-	allowed := regexp.MustCompile(`^[=A-Za-z0-9_:$,+\-*/^&()<>.%"\s!]+$`)
-	if !allowed.MatchString(formula) {
-		return fmt.Errorf("formula contains unsupported characters")
+	if depth != 0 {
+		return fmt.Errorf("formula has unbalanced parentheses")
 	}
 	return nil
 }
 
 func ValidateRange(path, sheetName, startCell, endCell string) (string, error) {
-	f, err := excelize.OpenFile(path)
+	f, closeWorkbook, err := openWorkbook(path)
 	if err != nil {
-		return "", fmt.Errorf(errFmtOpenWorkbook, err)
+		return "", err
 	}
-	defer func() { _ = f.Close() }()
-	if _, _, err := excelize.CellNameToCoordinates(startCell); err != nil {
+	defer closeWorkbook()
+	startCol, startRow, err := excelize.CellNameToCoordinates(startCell)
+	if err != nil {
 		return "", fmt.Errorf("invalid start_cell: %w", err)
 	}
 	if endCell != "" {
-		if _, _, err := excelize.CellNameToCoordinates(endCell); err != nil {
+		endCol, endRow, err := excelize.CellNameToCoordinates(endCell)
+		if err != nil {
 			return "", fmt.Errorf("invalid end_cell: %w", err)
+		}
+		if endCol < startCol || endRow < startRow {
+			return "", fmt.Errorf("range end must be below and to the right of start_cell")
 		}
 	}
 	if _, err := f.GetRows(sheetName); err != nil {
@@ -188,11 +229,11 @@ func ValidateRange(path, sheetName, startCell, endCell string) (string, error) {
 }
 
 func GetDataValidationInfo(path, sheetName string) ([]ValidationInfo, error) {
-	f, err := excelize.OpenFile(path)
+	f, closeWorkbook, err := openWorkbook(path)
 	if err != nil {
-		return nil, fmt.Errorf(errFmtOpenWorkbook, err)
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer closeWorkbook()
 	return getDataValidationInfoFromFile(f, sheetName)
 }
 
@@ -204,15 +245,20 @@ func getDataValidationInfoFromFile(f *excelize.File, sheetName string) ([]Valida
 	result := make([]ValidationInfo, 0, len(items))
 	for _, item := range items {
 		result = append(result, ValidationInfo{
-			Sqref:       item.Sqref,
-			Type:        item.Type,
-			Operator:    item.Operator,
-			Formula1:    item.Formula1,
-			Formula2:    item.Formula2,
-			ErrorTitle:  stringValue(item.ErrorTitle),
-			ErrorBody:   stringValue(item.Error),
-			PromptTitle: stringValue(item.PromptTitle),
-			PromptBody:  stringValue(item.Prompt),
+			Sqref:            item.Sqref,
+			Type:             item.Type,
+			Operator:         item.Operator,
+			Formula1:         item.Formula1,
+			Formula2:         item.Formula2,
+			AllowBlank:       item.AllowBlank,
+			ShowDropDown:     item.ShowDropDown,
+			ShowErrorMessage: item.ShowErrorMessage,
+			ErrorStyle:       stringValue(item.ErrorStyle),
+			ErrorTitle:       stringValue(item.ErrorTitle),
+			ErrorBody:        stringValue(item.Error),
+			ShowInputMessage: item.ShowInputMessage,
+			PromptTitle:      stringValue(item.PromptTitle),
+			PromptBody:       stringValue(item.Prompt),
 		})
 	}
 	return result, nil
@@ -227,16 +273,17 @@ func FilterRows(path, sheetName, rangeRef string, opts FilterRowsOptions) (*Filt
 		return nil, fmt.Errorf("filters is required")
 	}
 
-	f, err := excelize.OpenFile(path)
+	f, closeWorkbook, err := openWorkbook(path)
 	if err != nil {
-		return nil, fmt.Errorf(errFmtOpenWorkbook, err)
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer closeWorkbook()
 	if err := ensureSheetExists(f, sheetName); err != nil {
 		return nil, err
 	}
 
 	headers := make([]string, 0, endCol-startCol+1)
+	seenHeaders := make(map[string]struct{}, endCol-startCol+1)
 	for col := startCol; col <= endCol; col++ {
 		headerName := fmt.Sprintf("column_%d", col-startCol+1)
 		if opts.HasHeader {
@@ -249,10 +296,13 @@ func FilterRows(path, sheetName, rangeRef string, opts FilterRowsOptions) (*Filt
 				return nil, err
 			}
 			if strings.TrimSpace(value) != "" {
-				headerName = value
+				headerName = strings.TrimSpace(value)
 			}
 		}
-		headers = append(headers, headerName)
+		headers, err = appendHeader(headers, seenHeaders, headerName)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	resolvedFilters, err := resolveFilters(opts.Filters, headers, endCol-startCol+1, opts.HasHeader)
@@ -280,24 +330,20 @@ func FilterRows(path, sheetName, rangeRef string, opts FilterRowsOptions) (*Filt
 			if err != nil {
 				return nil, err
 			}
-			value, err := f.GetCellValue(sheetName, cell)
+			jsonValue, value, err := readCellJSONValue(f, sheetName, cell)
 			if err != nil {
 				return nil, err
 			}
 			if value != "" {
 				empty = false
 			}
-			item[header] = value
-			values = append(values, value)
+			item[header] = jsonValue
+			values = append(values, jsonComparisonValue(jsonValue, value))
 		}
 		if empty {
 			continue
 		}
-		matched, err := matchesAllFilters(values, resolvedFilters)
-		if err != nil {
-			return nil, err
-		}
-		if matched {
+		if matchesAllFilters(values, resolvedFilters) {
 			result.Rows = append(result.Rows, item)
 		}
 	}
@@ -309,6 +355,8 @@ type resolvedFilter struct {
 	Index    int
 	Operator string
 	Value    string
+	Regex    *regexp.Regexp
+	Number   float64
 }
 
 func resolveFilters(filters []Filter, headers []string, columnCount int, hasHeader bool) ([]resolvedFilter, error) {
@@ -322,11 +370,27 @@ func resolveFilters(filters []Filter, headers []string, columnCount int, hasHead
 		if !isSupportedFilterOperator(operator) {
 			return nil, fmt.Errorf("unsupported operator %q", filter.Operator)
 		}
+		item := resolvedFilter{Operator: operator, Value: filter.Value}
+		if operator == "regex" {
+			compiled, err := regexp.Compile(filter.Value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid regex value: %w", err)
+			}
+			item.Regex = compiled
+		}
+		if operator == "gt" || operator == "gte" || operator == "lt" || operator == "lte" {
+			number, ok := parseFiniteFloat(filter.Value)
+			if !ok {
+				return nil, fmt.Errorf("operator %q requires a numeric value", operator)
+			}
+			item.Number = number
+		}
 		if columnIndex, err := strconv.Atoi(column); err == nil {
 			if columnIndex < 1 || columnIndex > columnCount {
 				return nil, fmt.Errorf("column index %d is out of range", columnIndex)
 			}
-			resolved = append(resolved, resolvedFilter{Index: columnIndex - 1, Operator: operator, Value: filter.Value})
+			item.Index = columnIndex - 1
+			resolved = append(resolved, item)
 			continue
 		}
 		if !hasHeader {
@@ -342,7 +406,8 @@ func resolveFilters(filters []Filter, headers []string, columnCount int, hasHead
 		if matched < 0 {
 			return nil, fmt.Errorf("column %q not found in header row", column)
 		}
-		resolved = append(resolved, resolvedFilter{Index: matched, Operator: operator, Value: filter.Value})
+		item.Index = matched
+		resolved = append(resolved, item)
 	}
 	return resolved, nil
 }
@@ -356,51 +421,39 @@ func isSupportedFilterOperator(operator string) bool {
 	}
 }
 
-func matchesAllFilters(values []string, filters []resolvedFilter) (bool, error) {
+func matchesAllFilters(values []string, filters []resolvedFilter) bool {
 	for _, filter := range filters {
-		matched, err := matchFilterValue(values[filter.Index], filter.Operator, filter.Value)
-		if err != nil {
-			return false, err
-		}
-		if !matched {
-			return false, nil
+		if !matchFilterValue(values[filter.Index], filter) {
+			return false
 		}
 	}
-	return true, nil
+	return true
 }
 
-func matchFilterValue(actual, operator, expected string) (bool, error) {
-	switch operator {
+func matchFilterValue(actual string, filter resolvedFilter) bool {
+	switch filter.Operator {
 	case "equals":
-		return strings.EqualFold(strings.TrimSpace(actual), strings.TrimSpace(expected)), nil
+		return strings.EqualFold(strings.TrimSpace(actual), strings.TrimSpace(filter.Value))
 	case "contains":
-		return strings.Contains(strings.ToLower(actual), strings.ToLower(expected)), nil
+		return strings.Contains(strings.ToLower(actual), strings.ToLower(filter.Value))
 	case "regex":
-		re, err := regexp.Compile(expected)
-		if err != nil {
-			return false, fmt.Errorf("invalid regex value: %w", err)
-		}
-		return re.MatchString(actual), nil
+		return filter.Regex.MatchString(actual)
 	case "gt", "gte", "lt", "lte":
-		actualNumber, err := strconv.ParseFloat(strings.TrimSpace(actual), 64)
-		if err != nil {
-			return false, nil //nolint:nilerr // non-numeric cells don't match numeric comparisons
+		actualNumber, ok := parseFiniteFloat(actual)
+		if !ok {
+			return false
 		}
-		expectedNumber, err := strconv.ParseFloat(strings.TrimSpace(expected), 64)
-		if err != nil {
-			return false, fmt.Errorf("operator %q requires a numeric value", operator)
-		}
-		switch operator {
+		switch filter.Operator {
 		case "gt":
-			return actualNumber > expectedNumber, nil
+			return actualNumber > filter.Number
 		case "gte":
-			return actualNumber >= expectedNumber, nil
+			return actualNumber >= filter.Number
 		case "lt":
-			return actualNumber < expectedNumber, nil
+			return actualNumber < filter.Number
 		default:
-			return actualNumber <= expectedNumber, nil
+			return actualNumber <= filter.Number
 		}
 	default:
-		return false, fmt.Errorf("unsupported operator %q", operator)
+		return false
 	}
 }

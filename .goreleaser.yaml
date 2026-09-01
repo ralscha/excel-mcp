@@ -6,6 +6,8 @@ builds:
   - id: excel-mcp
     main: ./cmd/excel-mcp
     binary: excel-mcp
+    ldflags:
+      - -s -w -X excel-mcp/internal/server.Version={{.Version}}
     env:
       - CGO_ENABLED=0
     goos:

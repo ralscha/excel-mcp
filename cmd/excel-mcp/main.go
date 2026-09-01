@@ -24,6 +24,11 @@ func main() {
 	}
 
 	switch mode {
+	case "version", "--version", "-version":
+		if _, err := fmt.Fprintln(os.Stdout, server.Version); err != nil {
+			logger.Error("write version", "error", err)
+			os.Exit(1)
+		}
 	case "cli":
 		os.Exit(cli.Run(ctx, os.Args[2:], os.Stdout, os.Stderr, logger))
 	case "stdio":
@@ -55,7 +60,9 @@ func main() {
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "usage: %s [cli|stdio|streamable-http]\n", os.Args[0])
+		if _, err := fmt.Fprintf(os.Stderr, "usage: %s [cli|stdio|streamable-http|version]\n", os.Args[0]); err != nil {
+			logger.Error("write usage", "error", err)
+		}
 		os.Exit(2)
 	}
 }

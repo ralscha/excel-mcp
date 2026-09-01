@@ -21,13 +21,13 @@ func ResolvePath(mode PathMode, inputPath string) (string, error) {
 
 	if mode == PathModeDirect {
 		if !filepath.IsAbs(inputPath) {
-			return "", fmt.Errorf("stdio mode requires an absolute filepath")
+			return "", fmt.Errorf("direct path mode requires an absolute filepath")
 		}
 		return filepath.Clean(inputPath), nil
 	}
 
 	if filepath.IsAbs(inputPath) {
-		return "", fmt.Errorf("absolute filepaths are not allowed for HTTP transport")
+		return "", fmt.Errorf("absolute filepaths are not allowed in rooted path mode")
 	}
 
 	clean := filepath.Clean(inputPath)
@@ -48,13 +48,20 @@ func ResolvePath(mode PathMode, inputPath string) (string, error) {
 		return "", fmt.Errorf("resolve EXCEL_FILES_PATH: %w", err)
 	}
 
-	resolved := filepath.Join(rootAbs, clean)
-	resolvedAbs, err := filepath.Abs(resolved)
+	resolvedAbs, err := filepath.Abs(filepath.Join(rootAbs, clean))
 	if err != nil {
 		return "", fmt.Errorf("resolve filepath: %w", err)
 	}
 
-	rel, err := filepath.Rel(rootAbs, resolvedAbs)
+	rootReal, err := resolveExistingPath(rootAbs)
+	if err != nil {
+		return "", fmt.Errorf("resolve EXCEL_FILES_PATH symlinks: %w", err)
+	}
+	resolvedReal, err := resolveExistingPath(resolvedAbs)
+	if err != nil {
+		return "", fmt.Errorf("resolve filepath symlinks: %w", err)
+	}
+	rel, err := filepath.Rel(rootReal, resolvedReal)
 	if err != nil {
 		return "", fmt.Errorf("validate filepath: %w", err)
 	}
@@ -62,5 +69,35 @@ func ResolvePath(mode PathMode, inputPath string) (string, error) {
 		return "", fmt.Errorf("directory traversal is not allowed")
 	}
 
-	return resolvedAbs, nil
+	return resolvedReal, nil
+}
+
+// resolveExistingPath evaluates symlinks in the nearest existing ancestor and
+// then rejoins any path components that do not exist yet. This also protects
+// create operations whose destination file has not been created.
+func resolveExistingPath(value string) (string, error) {
+	current := filepath.Clean(value)
+	missing := make([]string, 0)
+	for {
+		_, err := os.Lstat(current)
+		if err == nil {
+			resolved, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			for index := len(missing) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, missing[index])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }

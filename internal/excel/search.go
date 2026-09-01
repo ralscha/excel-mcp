@@ -26,6 +26,12 @@ func FindInWorkbook(path string, opts FindOptions) (*FindResult, error) {
 	if matchMode != "contains" && matchMode != "exact" && matchMode != "regex" {
 		return nil, fmt.Errorf("match_mode must be 'contains', 'exact' or 'regex'")
 	}
+	if opts.ContextRows < 0 || opts.ContextCols < 0 {
+		return nil, fmt.Errorf("context_rows and context_cols must be non-negative")
+	}
+	if opts.MaxResults < 0 {
+		return nil, fmt.Errorf("max_results must be non-negative")
+	}
 	matcher, err := buildMatcher(opts.Query, matchMode, opts.CaseSensitive)
 	if err != nil {
 		return nil, err
@@ -35,11 +41,11 @@ func FindInWorkbook(path string, opts FindOptions) (*FindResult, error) {
 		maxResults = 50
 	}
 
-	f, err := excelize.OpenFile(path)
+	f, closeWorkbook, err := openWorkbook(path)
 	if err != nil {
-		return nil, fmt.Errorf(errFmtOpenWorkbook, err)
+		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer closeWorkbook()
 
 	sheets := opts.Sheets
 	if len(sheets) == 0 {
@@ -66,6 +72,9 @@ func FindInWorkbook(path string, opts FindOptions) (*FindResult, error) {
 					haystack, err = f.GetCellFormula(sheetName, cell)
 					if err != nil {
 						return nil, err
+					}
+					if haystack != "" && !strings.HasPrefix(haystack, "=") {
+						haystack = "=" + haystack
 					}
 					match.Formula = haystack
 				} else {

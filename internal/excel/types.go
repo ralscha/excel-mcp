@@ -156,15 +156,35 @@ type ReadResult struct {
 }
 
 type ValidationInfo struct {
-	Sqref       string `json:"sqref"`
-	Type        string `json:"type,omitempty"`
-	Operator    string `json:"operator,omitempty"`
-	Formula1    string `json:"formula1,omitempty"`
-	Formula2    string `json:"formula2,omitempty"`
-	ErrorTitle  string `json:"error_title,omitempty"`
-	ErrorBody   string `json:"error_body,omitempty"`
-	PromptTitle string `json:"prompt_title,omitempty"`
-	PromptBody  string `json:"prompt_body,omitempty"`
+	Sqref            string `json:"sqref"`
+	Type             string `json:"type,omitempty"`
+	Operator         string `json:"operator,omitempty"`
+	Formula1         string `json:"formula1,omitempty"`
+	Formula2         string `json:"formula2,omitempty"`
+	AllowBlank       bool   `json:"allow_blank,omitempty"`
+	ShowDropDown     bool   `json:"show_drop_down,omitempty"`
+	ShowErrorMessage bool   `json:"show_error_message,omitempty"`
+	ErrorStyle       string `json:"error_style,omitempty"`
+	ErrorTitle       string `json:"error_title,omitempty"`
+	ErrorBody        string `json:"error_body,omitempty"`
+	ShowInputMessage bool   `json:"show_input_message,omitempty"`
+	PromptTitle      string `json:"prompt_title,omitempty"`
+	PromptBody       string `json:"prompt_body,omitempty"`
+}
+
+type DataValidationOptions struct {
+	Type         string
+	Operator     string
+	Formula1     string
+	Formula2     string
+	Values       []string
+	AllowBlank   bool
+	ShowDropDown bool
+	ErrorStyle   string
+	ErrorTitle   string
+	ErrorBody    string
+	PromptTitle  string
+	PromptBody   string
 }
 
 type ChartOptions struct {

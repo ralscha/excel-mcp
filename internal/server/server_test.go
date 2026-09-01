@@ -731,7 +731,7 @@ func TestFilterRows(t *testing.T) {
 	if len(equalsPayload.Rows) != 3 {
 		t.Fatalf("expected 3 open rows, got %+v", equalsPayload.Rows)
 	}
-	if equalsPayload.Rows[0]["Region"] != "North" || equalsPayload.Rows[2]["Owner"] != "Drew" {
+	if equalsPayload.Rows[0]["Region"] != "North" || equalsPayload.Rows[0]["Revenue"] != float64(10) || equalsPayload.Rows[2]["Owner"] != "Drew" {
 		t.Fatalf("unexpected filtered rows: %+v", equalsPayload.Rows)
 	}
 
@@ -804,6 +804,16 @@ func TestFilterRows(t *testing.T) {
 			{"column": "Status", "operator": "between", "value": "Open"},
 		},
 	}, "unsupported operator \"between\"")
+
+	assertToolErrorContains(t, ctx, clientSession, "filter_rows", map[string]any{
+		"filepath":   workbook,
+		"sheet_name": "Sheet1",
+		"range":      "A1:D5",
+		"has_header": true,
+		"filters": []map[string]any{
+			{"column": "Status", "operator": "gte", "value": "not-a-number"},
+		},
+	}, "requires a numeric value")
 
 	assertToolErrorContains(t, ctx, clientSession, "filter_rows", map[string]any{
 		"filepath":   workbook,
@@ -1150,6 +1160,62 @@ func TestAdvancedToolValidationErrors(t *testing.T) {
 	}, "shift_direction must be 'up' or 'left'")
 }
 
+func TestAddAndDeleteDataValidation(t *testing.T) {
+	ctx, clientSession := newTestClient(t)
+	workbook := filepath.Join(t.TempDir(), "validation.xlsx")
+	createWorkbookFixture(t, workbook, func(f *excelize.File) error {
+		return f.SetCellValue("Sheet1", "A1", "Status")
+	})
+
+	callTool(t, ctx, clientSession, "add_data_validation", map[string]any{
+		"filepath":       workbook,
+		"sheet_name":     "Sheet1",
+		"range":          "A2:A100",
+		"type":           "list",
+		"values":         []string{"Open", "Closed"},
+		"allow_blank":    true,
+		"error_style":    "stop",
+		"error_title":    "Invalid status",
+		"error_body":     "Choose a listed status",
+		"prompt_title":   "Status",
+		"prompt_body":    "Choose Open or Closed",
+		"show_drop_down": true,
+	})
+	read := callTool(t, ctx, clientSession, "get_data_validation_info", map[string]any{
+		"filepath": workbook, "sheet_name": "Sheet1",
+	})
+	var rules []struct {
+		Sqref            string `json:"sqref"`
+		Type             string `json:"type"`
+		AllowBlank       bool   `json:"allow_blank"`
+		ShowErrorMessage bool   `json:"show_error_message"`
+		ShowInputMessage bool   `json:"show_input_message"`
+	}
+	if err := json.Unmarshal([]byte(read), &rules); err != nil {
+		t.Fatalf("unmarshal validation rules: %v", err)
+	}
+	if len(rules) != 1 || rules[0].Sqref != "A2:A100" || rules[0].Type != "list" || !rules[0].AllowBlank || !rules[0].ShowErrorMessage || !rules[0].ShowInputMessage {
+		t.Fatalf("unexpected validation rule: %+v", rules)
+	}
+
+	callTool(t, ctx, clientSession, "delete_data_validation", map[string]any{
+		"filepath": workbook, "sheet_name": "Sheet1", "range": "A2:A100",
+	})
+	read = callTool(t, ctx, clientSession, "get_data_validation_info", map[string]any{
+		"filepath": workbook, "sheet_name": "Sheet1",
+	})
+	if err := json.Unmarshal([]byte(read), &rules); err != nil {
+		t.Fatalf("unmarshal validation rules after delete: %v", err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("expected validation rule to be deleted, got %+v", rules)
+	}
+
+	assertToolErrorContains(t, ctx, clientSession, "add_data_validation", map[string]any{
+		"filepath": workbook, "sheet_name": "Sheet1", "range": "A2:A3", "type": "list",
+	}, "requires values or formula1")
+}
+
 func TestDescribeWorkbook(t *testing.T) {
 	ctx, clientSession := newTestClient(t)
 	workbook := filepath.Join(t.TempDir(), "describe.xlsx")
@@ -1484,6 +1550,10 @@ func TestGetSheetSchemaDefaultsAndErrors(t *testing.T) {
 		"end_cell":   "B5",
 		"header_row": 9,
 	}, "header_row must be within the selected range")
+
+	assertToolErrorContains(t, ctx, clientSession, "get_sheet_schema", map[string]any{
+		"filepath": workbook, "sheet_name": "Sheet1", "sample_size": -1,
+	}, "sample_size must be non-negative")
 }
 
 func TestFindInWorkbook(t *testing.T) {
@@ -1790,6 +1860,7 @@ func TestToolInputSchemaRequiredFields(t *testing.T) {
 	}
 
 	expectedRequired := map[string][]string{
+		"add_data_validation":      {"filepath", "sheet_name", "range", "type"},
 		"apply_formula":            {"filepath", "sheet_name", "cell", "formula"},
 		"clear_range":              {"filepath", "sheet_name", "start_cell"},
 		"copy_range":               {"filepath", "sheet_name", "source_start", "source_end", "target_start"},
@@ -1800,6 +1871,7 @@ func TestToolInputSchemaRequiredFields(t *testing.T) {
 		"create_workbook":          {"filepath"},
 		"create_worksheet":         {"filepath", "sheet_name"},
 		"delete_range":             {"filepath", "sheet_name", "start_cell"},
+		"delete_data_validation":   {"filepath", "sheet_name"},
 		"delete_sheet_columns":     {"filepath", "sheet_name", "start_col"},
 		"delete_sheet_rows":        {"filepath", "sheet_name", "start_row"},
 		"delete_worksheet":         {"filepath", "sheet_name"},

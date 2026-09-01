@@ -162,6 +162,22 @@ func TestRunToolInfoUnknownTool(t *testing.T) {
 	}
 }
 
+func TestRunRejectsUnknownAndTrailingJSONInput(t *testing.T) {
+	workbookPath := filepath.Join(t.TempDir(), "strict.xlsx")
+	for _, payload := range []string{
+		`{"filepath":` + strconv.Quote(workbookPath) + `,"filepth":"typo"}`,
+		`{"filepath":` + strconv.Quote(workbookPath) + `} {}`,
+	} {
+		inputPath := writeInputFile(t, payload)
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := Run(context.Background(), []string{"create_workbook", "--input", inputPath}, &stdout, &stderr, testLogger())
+		if exitCode != 1 || !strings.Contains(stderr.String(), "decode tool input") {
+			t.Fatalf("expected strict JSON failure, got exit=%d stderr=%q", exitCode, stderr.String())
+		}
+	}
+}
+
 func writeInputFile(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "input.json")

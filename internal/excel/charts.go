@@ -2,10 +2,13 @@ package excel
 
 import (
 	"archive/zip"
+	"encoding/xml"
 	"fmt"
+	"html"
 	"io"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -30,9 +33,18 @@ func describeCharts(workbookPath string, workbook *excelize.File) (map[string][]
 	if err != nil {
 		return nil, err
 	}
-	sheetRelByName := map[string]string{}
-	for _, match := range regexp.MustCompile(`<sheet[^>]*name="([^"]+)"[^>]*(?:r:id|relationships:id)="([^"]+)"`).FindAllStringSubmatch(workbookXML, -1) {
-		sheetRelByName[match[1]] = match[2]
+	var workbookDocument struct {
+		Sheets []struct {
+			Name  string `xml:"name,attr"`
+			RelID string `xml:"id,attr"`
+		} `xml:"sheets>sheet"`
+	}
+	if err := xml.Unmarshal([]byte(workbookXML), &workbookDocument); err != nil {
+		return nil, fmt.Errorf("parse workbook metadata: %w", err)
+	}
+	sheetRelByName := make(map[string]string, len(workbookDocument.Sheets))
+	for _, sheet := range workbookDocument.Sheets {
+		sheetRelByName[sheet.Name] = sheet.RelID
 	}
 	workbookTargets := relTargets(workbookRelsXML)
 	result := map[string][]ChartDescription{}
@@ -55,10 +67,15 @@ func describeCharts(workbookPath string, workbook *excelize.File) (map[string][]
 
 func drawingAnchorsXML(workbook *excelize.File, sheetPath string, sheetTargets map[string]string, entries map[string]*zip.File) []ChartDescription {
 	var result []ChartDescription
+	drawingTargets := make([]string, 0, len(sheetTargets))
 	for _, drawingTarget := range sheetTargets {
 		if !strings.Contains(drawingTarget, "drawings/") {
 			continue
 		}
+		drawingTargets = append(drawingTargets, drawingTarget)
+	}
+	sort.Strings(drawingTargets)
+	for _, drawingTarget := range drawingTargets {
 		drawingPath := normalizeZipTarget(path.Dir(sheetPath), drawingTarget)
 		drawingXML, err := readZipText(entries, drawingPath)
 		if err != nil {
@@ -87,8 +104,17 @@ func drawingAnchorsXML(workbook *excelize.File, sheetPath string, sheetTargets m
 
 func relTargets(relsXML string) map[string]string {
 	result := map[string]string{}
-	for _, match := range regexp.MustCompile(`<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"`).FindAllStringSubmatch(relsXML, -1) {
-		result[match[1]] = strings.ReplaceAll(match[2], `\`, "/")
+	var relationships struct {
+		Items []struct {
+			ID     string `xml:"Id,attr"`
+			Target string `xml:"Target,attr"`
+		} `xml:"Relationship"`
+	}
+	if err := xml.Unmarshal([]byte(relsXML), &relationships); err != nil {
+		return result
+	}
+	for _, relationship := range relationships.Items {
+		result[relationship.ID] = strings.ReplaceAll(relationship.Target, `\`, "/")
 	}
 	return result
 }
@@ -149,16 +175,27 @@ func chartTitle(chartXML string) string {
 	matches := regexp.MustCompile(`<a:t>(.*?)</a:t>`).FindAllStringSubmatch(chartXML, -1)
 	var builder strings.Builder
 	for _, match := range matches {
-		builder.WriteString(match[1])
+		builder.WriteString(html.UnescapeString(match[1]))
 	}
 	return builder.String()
 }
 
 func chartSeries(workbook *excelize.File, chartXML string) []ChartSeriesDescription {
-	matches := regexp.MustCompile(`(?s)<(?:c:)?ser>.*?<(?:c:)?tx>.*?<f>(.*?)</f>.*?</(?:c:)?tx>.*?<(?:c:)?cat>.*?<f>(.*?)</f>.*?</(?:c:)?cat>.*?<(?:c:)?val>.*?<f>(.*?)</f>.*?</(?:c:)?val>.*?</(?:c:)?ser>`).FindAllStringSubmatch(chartXML, -1)
-	series := make([]ChartSeriesDescription, 0, len(matches))
-	for _, match := range matches {
-		item := ChartSeriesDescription{NameRef: match[1], CategoriesRange: match[2], ValuesRange: match[3]}
+	seriesXML := regexp.MustCompile(`(?s)<(?:c:)?ser>.*?</(?:c:)?ser>`).FindAllString(chartXML, -1)
+	series := make([]ChartSeriesDescription, 0, len(seriesXML))
+	formula := func(element, value string) string {
+		match := regexp.MustCompile(`(?s)<(?:c:)?` + element + `>.*?<(?:c:)?f>(.*?)</(?:c:)?f>.*?</(?:c:)?` + element + `>`).FindStringSubmatch(value)
+		if len(match) == 2 {
+			return html.UnescapeString(match[1])
+		}
+		return ""
+	}
+	for _, value := range seriesXML {
+		item := ChartSeriesDescription{
+			NameRef:         formula("tx", value),
+			CategoriesRange: formula("(?:cat|xVal)", value),
+			ValuesRange:     formula("(?:val|yVal)", value),
+		}
 		item.DisplayName = resolveSeriesDisplayName(workbook, item.NameRef)
 		item.SourceSheet, item.SourceRange = normalizeSeriesSource(item.NameRef, item.CategoriesRange, item.ValuesRange)
 		series = append(series, item)
@@ -278,10 +315,7 @@ func normalizeCellRef(value string) string {
 }
 
 func formatSheetRangeRef(sheetName, startCell, endCell string) string {
-	quotedSheet := sheetName
-	if strings.ContainsAny(sheetName, " '!") {
-		quotedSheet = "'" + strings.ReplaceAll(sheetName, "'", "''") + "'"
-	}
+	quotedSheet := quoteSheetName(sheetName)
 	if endCell == "" || startCell == endCell {
 		return quotedSheet + "!" + startCell
 	}
@@ -359,9 +393,9 @@ func chartFromRange(sheetName, dataRange, chartType string, opts ChartOptions) (
 		valStart, _ := excelize.CoordinatesToCellName(startCol+1, row)
 		valEnd, _ := excelize.CoordinatesToCellName(endCol, row)
 		series = append(series, excelize.ChartSeries{
-			Name:       fmt.Sprintf("%s!%s", sheetName, absoluteCellRef(nameCell)),
-			Categories: fmt.Sprintf("%s!%s:%s", sheetName, absoluteCellRef(catStart), absoluteCellRef(catEnd)),
-			Values:     fmt.Sprintf("%s!%s:%s", sheetName, absoluteCellRef(valStart), absoluteCellRef(valEnd)),
+			Name:       formatSheetRangeRef(sheetName, absoluteCellRef(nameCell), ""),
+			Categories: formatSheetRangeRef(sheetName, absoluteCellRef(catStart), absoluteCellRef(catEnd)),
+			Values:     formatSheetRangeRef(sheetName, absoluteCellRef(valStart), absoluteCellRef(valEnd)),
 		})
 	}
 	chart := &excelize.Chart{Type: chartKind, Series: series}

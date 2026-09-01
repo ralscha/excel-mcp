@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -17,6 +18,19 @@ func TestResolvePathDirectRequiresAbsolute(t *testing.T) {
 	}
 	if resolved != abs {
 		t.Fatalf("expected %q, got %q", abs, resolved)
+	}
+}
+
+func TestResolvePathRootedRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(root, "outside-link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+	t.Setenv("EXCEL_FILES_PATH", root)
+	if _, err := ResolvePath(PathModeRooted, filepath.Join("outside-link", "book.xlsx")); err == nil {
+		t.Fatal("expected symlink escape rejection")
 	}
 }
 

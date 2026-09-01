@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -76,6 +77,7 @@ func RunCLITool(ctx context.Context, cfg Config, toolName string, payload []byte
 func cliToolDefs(cfg Config) map[string]cliToolDef {
 	tc := &toolContext{pathMode: cfg.PathMode, logger: cfg.Logger}
 	return map[string]cliToolDef{
+		"add_data_validation":      cliTool("add_data_validation", "Add a data validation rule to a worksheet range", tc.addDataValidation, schemaFor[addDataValidationArgs], textExample("Added list validation to Orders!D2:D200")),
 		"apply_formula":            cliTool("apply_formula", "Apply an Excel formula to a cell", tc.applyFormula, schemaFor[formulaArgs], textExample("Applied formula =SUM(B2:B10) to Summary!B11")),
 		"clear_range":              cliTool("clear_range", "Clear cell values in a range without shifting cells", tc.clearRange, schemaFor[optionalEndRangeArgs], textExample("Cleared values in Sheet1!A2:D20")),
 		"copy_range":               cliTool("copy_range", "Copy a range of cells to another location", tc.copyRange, schemaFor[copyRangeArgs], textExample("Copied range Sheet1!A1:D10 to Archive!A1")),
@@ -83,9 +85,10 @@ func cliToolDefs(cfg Config) map[string]cliToolDef {
 		"create_chart":             cliTool("create_chart", "Create a chart in a worksheet", tc.createChart, schemaFor[chartArgs], textExample("Created line chart on Sheet1 anchored at E2")),
 		"create_pivot_table":       cliTool("create_pivot_table", "Create a pivot table in a worksheet", tc.createPivotTable, schemaFor[pivotArgs], textExample("Created pivot table on Summary anchored at H2")),
 		"create_table":             cliTool("create_table", "Create a native Excel table from a specified data range", tc.createTable, schemaFor[tableArgs], textExample("Created table OrdersTable from range Orders!A1:D200")),
-		"create_workbook":          cliTool("create_workbook", "Create a new Excel workbook", tc.createWorkbook, schemaFor[fileArgs], textExample("Workbook created at C:\\workbooks\\sales.xlsx")),
+		"create_workbook":          cliTool("create_workbook", "Create a new Excel workbook", tc.createWorkbook, schemaFor[createWorkbookArgs], textExample("Workbook created at C:\\workbooks\\sales.xlsx")),
 		"create_worksheet":         cliTool("create_worksheet", "Create a new worksheet in an existing workbook", tc.createWorksheet, schemaFor[createWorksheetArgs], textExample("Worksheet Summary created in C:\\workbooks\\sales.xlsx")),
 		"delete_range":             cliTool("delete_range", "Delete a range of cells and shift remaining cells", tc.deleteRange, schemaFor[deleteRangeArgs], textExample("Deleted range Sheet1!B2:D4 and shifted cells up")),
+		"delete_data_validation":   cliTool("delete_data_validation", "Delete data validation rules from a worksheet range or sheet", tc.deleteDataValidation, schemaFor[deleteDataValidationArgs], textExample("Deleted data validation from Orders!D2:D200")),
 		"delete_sheet_columns":     cliTool("delete_sheet_columns", "Delete one or more columns starting at the specified column", tc.deleteSheetColumns, schemaFor[columnArgs], textExample("Deleted 2 columns from Sheet1 starting at column 3")),
 		"delete_sheet_rows":        cliTool("delete_sheet_rows", "Delete one or more rows starting at the specified row", tc.deleteSheetRows, schemaFor[rowArgs], textExample("Deleted 3 rows from Sheet1 starting at row 8")),
 		"delete_worksheet":         cliTool("delete_worksheet", "Delete a worksheet from a workbook", tc.deleteWorksheet, schemaFor[createWorksheetArgs], textExample("Worksheet Archive deleted from C:\\workbooks\\sales.xlsx")),
@@ -270,7 +273,15 @@ func decodeCLIArgs[T any](payload []byte) (T, error) {
 	if trimmed == "" {
 		trimmed = "{}"
 	}
-	if err := json.Unmarshal([]byte(trimmed), &args); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&args); err != nil {
+		return args, fmt.Errorf("decode tool input: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			err = fmt.Errorf("multiple JSON values are not allowed")
+		}
 		return args, fmt.Errorf("decode tool input: %w", err)
 	}
 	return args, nil

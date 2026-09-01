@@ -51,6 +51,8 @@ It exposes a series of tools to inspect and manipulate Excel workbooks.
 - `unmerge_cells`: unmerge a previously merged range of cells.
 - `get_merged_cells`: list merged-cell ranges in a worksheet.
 - `validate_excel_range`: validate that a worksheet range or cell reference exists and is properly formatted.
+- `add_data_validation`: add list, numeric, date, time, text-length, or custom validation to a cell or range.
+- `delete_data_validation`: remove validation from a cell/range or all validation from a worksheet.
 - `get_data_validation_info`: return data validation rules and metadata for a worksheet.
 - `apply_formula`: apply an Excel formula to a cell.
 - `validate_formula_syntax`: validate Excel formula syntax without applying it.
@@ -70,6 +72,7 @@ go run ./cmd/excel-mcp cli list-tools
 go run ./cmd/excel-mcp cli list-tools --json
 go run ./cmd/excel-mcp cli tool-info create_workbook
 go run ./cmd/excel-mcp cli tool-info --json create_workbook
+go run ./cmd/excel-mcp version
 ```
 
 MCP:
@@ -107,6 +110,7 @@ go run ./cmd/excel-mcp streamable-http
 ### `cli`
 
 - Run a tool directly from the shell with JSON input that matches the MCP tool arguments.
+- Unknown JSON fields and trailing JSON values are rejected to catch misspelled arguments.
 - By default, workbook paths must be absolute.
 - Use `--rooted` to resolve relative workbook paths under `EXCEL_FILES_PATH`.
 - Tool names match the MCP tool names exactly and are intended to remain stable long-term.
@@ -176,6 +180,10 @@ EOF
 - HTTP mode rejects absolute paths and resolves relative paths under `EXCEL_FILES_PATH`.
 - `cli` mode supports `list-tools --json` for machine-readable discovery, `tool-info [--json] <tool-name>` for per-tool schema and output-example inspection, and `--input -` for stdin-fed JSON payloads.
 - `cli` tool names intentionally match MCP tool names exactly.
+- `create_workbook` protects existing files by default; pass `"overwrite": true` to replace one explicitly.
+- Mutating calls to the same workbook are serialized so concurrent HTTP requests cannot lose updates.
+- `read_data_from_excel` and `filter_rows` return numbers and booleans as JSON primitives and reject duplicate headers instead of silently dropping columns.
+- `copy_range`, `sort_range`, and `delete_range` preserve cell formulas and styles; relative formula references move with their cells.
 - `describe_workbook` can include table, chart, pivot, named-range, merged-range, and validation metadata.
 - `list_charts` supports workbook-wide listing and optional `source_sheet` filtering.
 - `get_sheet_schema` defaults `sample_size` to `3` when omitted.
@@ -192,6 +200,8 @@ EOF
 - `clear_range` clears cell values in-place without shifting surrounding cells.
 - `delete_range`, `clear_range`, and `validate_excel_range` allow single-cell calls by omitting `end_cell`.
 - Row and column insert/delete `count` values default to `1` when omitted and must be positive when provided.
+- `add_data_validation` accepts inline `values` or a source-range `formula1` for list validation. Non-list rules accept `between`, `equal`, `gt`, `gte`, `lt`, `lte`, `not_between`, and `not_equal` operators.
+- `delete_data_validation` removes all validation rules on a sheet when `range` is omitted.
 - `format_range` accepts built-in or custom `number_format` values, optional `protection` settings (`locked`, `hidden`), and an optional single `conditional_format` rule with an optional nested style.
 
 ## Example Tool Inputs
@@ -294,6 +304,22 @@ Typical `upsert_rows` result shape:
       "reason": "no match and insert_if_missing=false"
     }
   ]
+}
+```
+
+Add a drop-down validation rule:
+
+```json
+{
+  "filepath": "/workbooks/sales.xlsx",
+  "sheet_name": "Orders",
+  "range": "D2:D500",
+  "type": "list",
+  "values": ["Open", "Paid", "Cancelled"],
+  "allow_blank": true,
+  "error_style": "stop",
+  "error_title": "Invalid status",
+  "error_body": "Choose a status from the list"
 }
 ```
 
