@@ -321,7 +321,7 @@ func SetRowHeights(path, sheetName string, heights []RowHeightEntry) (string, er
 
 func displayTextWidth(value string) float64 {
 	maxWidth := 0
-	for _, line := range strings.Split(value, "\n") {
+	for line := range strings.SplitSeq(value, "\n") {
 		maxWidth = max(maxWidth, utf8.RuneCountInString(strings.TrimSuffix(line, "\r")))
 	}
 	return float64(maxWidth)

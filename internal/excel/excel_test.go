@@ -243,12 +243,10 @@ func TestConcurrentWorkbookMutations(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, workers)
 	for index := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := CreateWorksheet(path, fmt.Sprintf("Sheet-%d", index))
 			errs <- err
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
