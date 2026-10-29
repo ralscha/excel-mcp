@@ -42,8 +42,9 @@ func main() {
 		if port == "" {
 			port = "8000"
 		}
+		mcpServer := server.New(server.Config{PathMode: server.PathModeRooted, Logger: logger})
 		handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
-			return server.New(server.Config{PathMode: server.PathModeRooted, Logger: logger})
+			return mcpServer
 		}, &mcp.StreamableHTTPOptions{Stateless: true})
 		addr := ":" + port
 		logger.Info("starting streamable HTTP server", "addr", addr, "path", "/mcp")

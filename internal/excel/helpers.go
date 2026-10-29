@@ -80,17 +80,34 @@ func ensureSheetExists(f *excelize.File, sheetName string) error {
 	return nil
 }
 
+func worksheetDataBounds(f *excelize.File, sheetName string) (int, int, error) {
+	rows, err := f.Rows(sheetName)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	maxRow, maxCol, rowNumber := 0, 0, 0
+	for rows.Next() {
+		rowNumber++
+		row, err := rows.Columns(excelize.Options{RawCellValue: true})
+		if err != nil {
+			return 0, 0, err
+		}
+		if len(row) > 0 {
+			maxRow = rowNumber
+			maxCol = max(maxCol, len(row))
+		}
+	}
+	if err := rows.Error(); err != nil {
+		return 0, 0, err
+	}
+	return maxRow, maxCol, nil
+}
+
 func worksheetBounds(f *excelize.File, sheetName string) (int, int, string, error) {
-	rows, err := f.GetRows(sheetName)
+	maxRow, maxCol, err := worksheetDataBounds(f, sheetName)
 	if err != nil {
 		return 0, 0, "", err
-	}
-	maxRow := len(rows)
-	maxCol := 0
-	for _, row := range rows {
-		if len(row) > maxCol {
-			maxCol = len(row)
-		}
 	}
 	merged, err := f.GetMergeCells(sheetName)
 	if err != nil {
@@ -123,7 +140,7 @@ func worksheetBounds(f *excelize.File, sheetName string) (int, int, string, erro
 }
 
 func inferCellKind(value string) string {
-	if _, err := strconv.ParseBool(strings.ToLower(value)); err == nil {
+	if strings.EqualFold(value, "true") || strings.EqualFold(value, "false") {
 		return "boolean"
 	}
 	if _, ok := parseFiniteFloat(value); ok {

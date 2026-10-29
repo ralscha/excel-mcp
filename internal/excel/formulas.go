@@ -2,6 +2,7 @@ package excel
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/xuri/efp"
@@ -10,6 +11,8 @@ import (
 
 var formulaRangePattern = regexp.MustCompile(`^((?:'[^']*(?:''[^']*)*'|[^!]+)!)?(\$?[A-Za-z]{1,3}\$?[0-9]+)(?::(\$?[A-Za-z]{1,3}\$?[0-9]+))?$`)
 var formulaCellPattern = regexp.MustCompile(`^(\$?)([A-Za-z]{1,3})(\$?)([0-9]+)$`)
+var formulaColumnRangePattern = regexp.MustCompile(`^((?:'[^']*(?:''[^']*)*'|[^!]+)!)?(\$?[A-Za-z]{1,3}):(\$?[A-Za-z]{1,3})$`)
+var formulaRowRangePattern = regexp.MustCompile(`^((?:'[^']*(?:''[^']*)*'|[^!]+)!)?(\$?[0-9]+):(\$?[0-9]+)$`)
 
 func translateFormula(formula string, colDelta, rowDelta int) string {
 	if formula == "" || (colDelta == 0 && rowDelta == 0) {
@@ -19,11 +22,19 @@ func translateFormula(formula string, colDelta, rowDelta int) string {
 	parser.Parse(formula)
 	for index := range parser.Tokens.Items {
 		token := &parser.Tokens.Items[index]
+		if token.TType == efp.TokenTypeOperand && token.TSubType == efp.TokenSubTypeText {
+			token.TValue = strings.ReplaceAll(token.TValue, `"`, `""`)
+		}
 		if token.TType != efp.TokenTypeOperand || token.TSubType != efp.TokenSubTypeRange {
 			continue
 		}
 		match := formulaRangePattern.FindStringSubmatch(token.TValue)
 		if match == nil {
+			if columns := formulaColumnRangePattern.FindStringSubmatch(token.TValue); columns != nil {
+				token.TValue = translateWholeRange(columns, colDelta, true)
+			} else if rows := formulaRowRangePattern.FindStringSubmatch(token.TValue); rows != nil {
+				token.TValue = translateWholeRange(rows, rowDelta, false)
+			}
 			continue
 		}
 		start, ok := translateCellReference(match[2], colDelta, rowDelta)
@@ -42,6 +53,42 @@ func translateFormula(formula string, colDelta, rowDelta int) string {
 		}
 	}
 	return parser.Render()
+}
+
+func translateWholeRange(parts []string, delta int, columns bool) string {
+	refs := [2]string{}
+	for index, ref := range parts[2:] {
+		absolute := strings.HasPrefix(ref, "$")
+		value := strings.TrimPrefix(ref, "$")
+		var number int
+		var err error
+		limit := excelize.TotalRows
+		if columns {
+			number, err = excelize.ColumnNameToNumber(value)
+			limit = excelize.MaxColumns
+		} else {
+			number, err = strconv.Atoi(value)
+		}
+		if err != nil || number < 1 || number > limit {
+			return "#REF!"
+		}
+		if !absolute {
+			number += delta
+		}
+		if number < 1 || number > limit {
+			return "#REF!"
+		}
+		if columns {
+			value, _ = excelize.ColumnNumberToName(number)
+		} else {
+			value = strconv.Itoa(number)
+		}
+		if absolute {
+			value = "$" + value
+		}
+		refs[index] = value
+	}
+	return quoteFormulaSheetPrefix(parts[1]) + refs[0] + ":" + refs[1]
 }
 
 func translateCellReference(ref string, colDelta, rowDelta int) (string, bool) {

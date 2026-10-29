@@ -31,7 +31,7 @@ func CreateWorkbook(path string, overwrite bool) (string, error) {
 
 func CreateWorksheet(path, sheetName string) (string, error) {
 	err := withWorkbook(path, func(f *excelize.File) error {
-		_, err := f.NewSheet(sheetName)
+		_, err := newWorksheet(f, sheetName)
 		return err
 	})
 	if err != nil {
@@ -49,7 +49,7 @@ func CopyWorksheet(path, sourceSheet, targetSheet string) (string, error) {
 		if err != nil {
 			return err
 		}
-		newIndex, err := f.NewSheet(targetSheet)
+		newIndex, err := newWorksheet(f, targetSheet)
 		if err != nil {
 			return err
 		}
@@ -82,12 +82,36 @@ func RenameWorksheet(path, oldName, newName string) (string, error) {
 		if err := ensureSheetExists(f, oldName); err != nil {
 			return err
 		}
-		return f.SetSheetName(oldName, newName)
+		sourceIndex, err := f.GetSheetIndex(oldName)
+		if err != nil {
+			return err
+		}
+		targetIndex, err := f.GetSheetIndex(newName)
+		if err != nil {
+			return err
+		}
+		if targetIndex >= 0 && targetIndex != sourceIndex {
+			return fmt.Errorf("worksheet %q already exists", newName)
+		}
+		return f.SetSheetName(f.GetSheetName(sourceIndex), newName)
 	})
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("renamed worksheet %q to %q in %s", oldName, newName, path), nil
+}
+
+// NewSheet returns an existing sheet's index without an error. Reject that case
+// explicitly so creating or copying a worksheet cannot overwrite another sheet.
+func newWorksheet(f *excelize.File, sheetName string) (int, error) {
+	index, err := f.GetSheetIndex(sheetName)
+	if err != nil {
+		return -1, err
+	}
+	if index >= 0 {
+		return -1, fmt.Errorf("worksheet %q already exists", sheetName)
+	}
+	return f.NewSheet(sheetName)
 }
 
 func GetWorkbookMetadata(path string, includeRanges bool) (*WorkbookMetadata, error) {
@@ -210,7 +234,7 @@ func ListCharts(path, sheetName, sourceSheet string) (*ListChartsResult, error) 
 	if err != nil {
 		return nil, err
 	}
-	result := &ListChartsResult{FilePath: path, SheetName: sheetName, SourceSheet: sourceSheet}
+	result := &ListChartsResult{FilePath: path, SheetName: sheetName, SourceSheet: sourceSheet, Charts: []ChartDescription{}}
 	appendChart := func(hostSheet string, chart ChartDescription) {
 		if sourceSheet != "" && !chartUsesSourceSheet(chart, sourceSheet) {
 			return
@@ -219,8 +243,13 @@ func ListCharts(path, sheetName, sourceSheet string) (*ListChartsResult, error) 
 		result.Charts = append(result.Charts, chart)
 	}
 	if sheetName != "" {
-		for _, chart := range charts[sheetName] {
-			appendChart(sheetName, chart)
+		index, err := f.GetSheetIndex(sheetName)
+		if err != nil {
+			return nil, err
+		}
+		hostSheet := f.GetSheetName(index)
+		for _, chart := range charts[hostSheet] {
+			appendChart(hostSheet, chart)
 		}
 		return result, nil
 	}
@@ -234,8 +263,13 @@ func ListCharts(path, sheetName, sourceSheet string) (*ListChartsResult, error) 
 
 func chartUsesSourceSheet(chart ChartDescription, sheetName string) bool {
 	for _, series := range chart.Series {
-		if series.SourceSheet == sheetName {
+		if strings.EqualFold(series.SourceSheet, sheetName) {
 			return true
+		}
+		for _, source := range []string{series.NameRef, series.CategoriesRange, series.ValuesRange} {
+			if ref, ok := parseSheetRangeRef(source); ok && strings.EqualFold(ref.Sheet, sheetName) {
+				return true
+			}
 		}
 	}
 	return false

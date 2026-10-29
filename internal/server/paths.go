@@ -26,6 +26,9 @@ func ResolvePath(mode PathMode, inputPath string) (string, error) {
 		}
 		return filepath.Clean(inputPath), nil
 	}
+	if mode != PathModeRooted {
+		return "", fmt.Errorf("unsupported path mode %d", mode)
+	}
 
 	if filepath.IsAbs(inputPath) {
 		return "", fmt.Errorf("absolute filepaths are not allowed in rooted path mode")
@@ -35,8 +38,8 @@ func ResolvePath(mode PathMode, inputPath string) (string, error) {
 	if clean == "." || clean == "" {
 		return "", fmt.Errorf("filepath is required")
 	}
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("directory traversal is not allowed")
+	if !filepath.IsLocal(inputPath) {
+		return "", fmt.Errorf("filepath must be local to EXCEL_FILES_PATH; directory traversal and reserved paths are not allowed")
 	}
 
 	root := os.Getenv("EXCEL_FILES_PATH")
@@ -80,7 +83,7 @@ func resolveExistingPath(value string) (string, error) {
 	current := filepath.Clean(value)
 	missing := make([]string, 0)
 	for {
-		_, err := os.Lstat(current)
+		_, err := os.Lstat(current) //nolint:gosec // G703: metadata-only probe needed for canonical containment checks.
 		if err == nil {
 			resolved, err := filepath.EvalSymlinks(current)
 			if err != nil {

@@ -4,12 +4,9 @@ import (
 	"archive/zip"
 	"encoding/xml"
 	"fmt"
-	"html"
 	"io"
 	"path"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/xuri/excelize/v2"
@@ -82,24 +79,43 @@ func drawingAnchorsXML(workbook *excelize.File, sheetPath string, sheetTargets m
 			continue
 		}
 		drawingTargets := relTargets(mustZipText(entries, relsPathFor(drawingPath)))
-		for _, anchorMatch := range regexp.MustCompile(`(?s)<xdr:(?:oneCellAnchor|twoCellAnchor).*?<xdr:from>.*?<xdr:col>(\d+)</xdr:col>.*?<xdr:row>(\d+)</xdr:row>.*?</xdr:from>.*?<c:chart[^>]*r:id="([^"]+)"`).FindAllStringSubmatch(drawingXML, -1) {
-			colZero, _ := strconv.Atoi(anchorMatch[1])
-			rowZero, _ := strconv.Atoi(anchorMatch[2])
-			chartPath := normalizeZipTarget(path.Dir(drawingPath), drawingTargets[anchorMatch[3]])
+		var drawing struct {
+			Anchors []drawingAnchorXML `xml:",any"`
+		}
+		if err := xml.Unmarshal([]byte(drawingXML), &drawing); err != nil {
+			continue
+		}
+		for _, anchor := range drawing.Anchors {
+			if anchor.Chart.RelID == "" {
+				continue
+			}
+			chartPath := normalizeZipTarget(path.Dir(drawingPath), drawingTargets[anchor.Chart.RelID])
 			chartXML, err := readZipText(entries, chartPath)
 			if err != nil {
 				continue
 			}
-			result = append(result, ChartDescription{
-				AnchorCell: mustCellName(colZero+1, rowZero+1),
-				Title:      chartTitle(chartXML),
-				ChartType:  chartType(chartXML),
-				ChartPath:  chartPath,
-				Series:     chartSeries(workbook, chartXML),
-			})
+			chart, err := parseChartMetadata(workbook, chartXML)
+			if err != nil {
+				continue
+			}
+			if anchor.From != nil {
+				chart.AnchorCell = mustCellName(anchor.From.Col+1, anchor.From.Row+1)
+			}
+			chart.ChartPath = chartPath
+			result = append(result, chart)
 		}
 	}
 	return result
+}
+
+type drawingAnchorXML struct {
+	From *struct {
+		Col int `xml:"col"`
+		Row int `xml:"row"`
+	} `xml:"from"`
+	Chart struct {
+		RelID string `xml:"id,attr"`
+	} `xml:"graphicFrame>graphic>graphicData>chart"`
 }
 
 func relTargets(relsXML string) map[string]string {
@@ -171,36 +187,112 @@ func mustZipText(entries map[string]*zip.File, name string) string {
 	return text
 }
 
-func chartTitle(chartXML string) string {
-	matches := regexp.MustCompile(`<a:t>(.*?)</a:t>`).FindAllStringSubmatch(chartXML, -1)
-	var builder strings.Builder
-	for _, match := range matches {
-		builder.WriteString(html.UnescapeString(match[1]))
-	}
-	return builder.String()
+type chartReferenceXML struct {
+	Formula string   `xml:"f"`
+	Cached  []string `xml:"strCache>pt>v"`
 }
 
-func chartSeries(workbook *excelize.File, chartXML string) []ChartSeriesDescription {
-	seriesXML := regexp.MustCompile(`(?s)<(?:c:)?ser>.*?</(?:c:)?ser>`).FindAllString(chartXML, -1)
-	series := make([]ChartSeriesDescription, 0, len(seriesXML))
-	formula := func(element, value string) string {
-		match := regexp.MustCompile(`(?s)<(?:c:)?` + element + `>.*?<(?:c:)?f>(.*?)</(?:c:)?f>.*?</(?:c:)?` + element + `>`).FindStringSubmatch(value)
-		if len(match) == 2 {
-			return html.UnescapeString(match[1])
-		}
-		return ""
+type chartSourceXML struct {
+	StringRef chartReferenceXML `xml:"strRef"`
+	NumberRef chartReferenceXML `xml:"numRef"`
+}
+
+func (source chartSourceXML) formula() string {
+	if source.StringRef.Formula != "" {
+		return source.StringRef.Formula
 	}
-	for _, value := range seriesXML {
-		item := ChartSeriesDescription{
-			NameRef:         formula("tx", value),
-			CategoriesRange: formula("(?:cat|xVal)", value),
-			ValuesRange:     formula("(?:val|yVal)", value),
-		}
-		item.DisplayName = resolveSeriesDisplayName(workbook, item.NameRef)
-		item.SourceSheet, item.SourceRange = normalizeSeriesSource(item.NameRef, item.CategoriesRange, item.ValuesRange)
-		series = append(series, item)
+	return source.NumberRef.Formula
+}
+
+type chartSeriesXML struct {
+	Name struct {
+		Reference chartReferenceXML `xml:"strRef"`
+		Value     string            `xml:"v"`
+	} `xml:"tx"`
+	Categories chartSourceXML `xml:"cat"`
+	Values     chartSourceXML `xml:"val"`
+	XValues    chartSourceXML `xml:"xVal"`
+	YValues    chartSourceXML `xml:"yVal"`
+}
+
+func parseChartMetadata(workbook *excelize.File, chartXML string) (ChartDescription, error) {
+	var document struct {
+		Chart struct {
+			Title struct {
+				Runs      []string          `xml:"tx>rich>p>r>t"`
+				Reference chartReferenceXML `xml:"tx>strRef"`
+			} `xml:"title"`
+			PlotArea struct {
+				Groups []struct {
+					XMLName xml.Name
+					BarDir  struct {
+						Value string `xml:"val,attr"`
+					} `xml:"barDir"`
+					Series []chartSeriesXML `xml:"ser"`
+				} `xml:",any"`
+			} `xml:"plotArea"`
+		} `xml:"chart"`
 	}
-	return series
+	if err := xml.Unmarshal([]byte(chartXML), &document); err != nil {
+		return ChartDescription{}, err
+	}
+	result := ChartDescription{
+		Title:     strings.Join(document.Chart.Title.Runs, ""),
+		ChartType: "unknown",
+		Series:    make([]ChartSeriesDescription, 0),
+	}
+	if result.Title == "" {
+		result.Title = resolveSeriesDisplayName(workbook, document.Chart.Title.Reference.Formula)
+		if result.Title == "" {
+			result.Title = strings.Join(document.Chart.Title.Reference.Cached, "")
+		}
+	}
+	for _, group := range document.Chart.PlotArea.Groups {
+		kind := ""
+		switch group.XMLName.Local {
+		case "lineChart":
+			kind = "line"
+		case "barChart":
+			kind = "bar"
+			if group.BarDir.Value == "col" {
+				kind = "column"
+			}
+		case "pieChart":
+			kind = "pie"
+		case "doughnutChart":
+			kind = "doughnut"
+		case "scatterChart":
+			kind = "scatter"
+		case "areaChart":
+			kind = "area"
+		}
+		if kind != "" && result.ChartType == "unknown" {
+			result.ChartType = kind
+		}
+		for _, series := range group.Series {
+			item := ChartSeriesDescription{
+				NameRef:         series.Name.Reference.Formula,
+				CategoriesRange: series.Categories.formula(),
+				ValuesRange:     series.Values.formula(),
+			}
+			if item.CategoriesRange == "" {
+				item.CategoriesRange = series.XValues.formula()
+			}
+			if item.ValuesRange == "" {
+				item.ValuesRange = series.YValues.formula()
+			}
+			item.DisplayName = resolveSeriesDisplayName(workbook, item.NameRef)
+			if item.DisplayName == "" {
+				item.DisplayName = series.Name.Value
+				if item.DisplayName == "" && len(series.Name.Reference.Cached) > 0 {
+					item.DisplayName = series.Name.Reference.Cached[0]
+				}
+			}
+			item.SourceSheet, item.SourceRange = normalizeSeriesSource(item.NameRef, item.CategoriesRange, item.ValuesRange)
+			result.Series = append(result.Series, item)
+		}
+	}
+	return result, nil
 }
 
 type sheetRangeRef struct {
@@ -320,32 +412,6 @@ func formatSheetRangeRef(sheetName, startCell, endCell string) string {
 		return quotedSheet + "!" + startCell
 	}
 	return quotedSheet + "!" + startCell + ":" + endCell
-}
-
-func chartType(chartXML string) string {
-	if strings.Contains(chartXML, `<c:lineChart`) || strings.Contains(chartXML, `<lineChart`) {
-		return "line"
-	}
-	if strings.Contains(chartXML, `<c:barChart`) || strings.Contains(chartXML, `<barChart`) {
-		barDir := regexp.MustCompile(`<(?:c:)?barDir[^>]*val="([^"]+)"`).FindStringSubmatch(chartXML)
-		if len(barDir) == 2 && barDir[1] == "col" {
-			return "column"
-		}
-		return "bar"
-	}
-	if strings.Contains(chartXML, `<c:pieChart`) || strings.Contains(chartXML, `<pieChart`) {
-		return "pie"
-	}
-	if strings.Contains(chartXML, `<c:doughnutChart`) || strings.Contains(chartXML, `<doughnutChart`) {
-		return "doughnut"
-	}
-	if strings.Contains(chartXML, `<c:scatterChart`) || strings.Contains(chartXML, `<scatterChart`) {
-		return "scatter"
-	}
-	if strings.Contains(chartXML, `<c:areaChart`) || strings.Contains(chartXML, `<areaChart`) {
-		return "area"
-	}
-	return "unknown"
 }
 
 func mustCellName(col, row int) string {

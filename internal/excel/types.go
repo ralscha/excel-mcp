@@ -126,6 +126,7 @@ type FindResult struct {
 	SearchType string      `json:"search_type"`
 	MatchMode  string      `json:"match_mode"`
 	Matches    []FindMatch `json:"matches"`
+	Truncated  bool        `json:"truncated,omitempty"`
 }
 
 type FindMatch struct {

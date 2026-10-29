@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -30,11 +31,14 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, logger *s
 	}
 
 	toolName := args[0]
-	fs := flag.NewFlagSet("excel-mcp cli", flag.ContinueOnError)
+	fs := flag.NewFlagSet("excel-mcp cli "+toolName, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	inputPath := fs.String("input", "", "Read tool JSON input from a file path or - for stdin")
 	rooted := fs.Bool("rooted", false, "Resolve file paths relative to EXCEL_FILES_PATH")
 	if err := fs.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if fs.NArg() != 0 {
@@ -72,6 +76,9 @@ func runListTools(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	jsonOutput := fs.Bool("json", false, "Emit machine-readable JSON output")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if fs.NArg() != 0 {
@@ -107,6 +114,9 @@ func runToolInfo(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	jsonOutput := fs.Bool("json", false, "Emit machine-readable JSON output")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if fs.NArg() != 1 {

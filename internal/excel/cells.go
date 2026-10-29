@@ -40,6 +40,9 @@ func writeCellSnapshot(f *excelize.File, sheetName, cell string, snapshot cellSn
 	var err error
 	if snapshot.formula != "" {
 		formula := translateFormula(strings.TrimPrefix(snapshot.formula, "="), colDelta, rowDelta)
+		if err := f.SetCellDefault(sheetName, cell, ""); err != nil {
+			return err
+		}
 		err = f.SetCellFormula(sheetName, cell, formula)
 	} else {
 		switch snapshot.cellType {
@@ -68,9 +71,6 @@ func readCellJSONValue(f *excelize.File, sheetName, cell string) (any, string, e
 	displayValue, err := f.GetCellValue(sheetName, cell)
 	if err != nil {
 		return nil, "", err
-	}
-	if displayValue == "" {
-		return "", "", nil
 	}
 	cellType, err := f.GetCellType(sheetName, cell)
 	if err != nil {

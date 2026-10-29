@@ -110,7 +110,7 @@ go run ./cmd/excel-mcp streamable-http
 ### `cli`
 
 - Run a tool directly from the shell with JSON input that matches the MCP tool arguments.
-- Unknown JSON fields and trailing JSON values are rejected to catch misspelled arguments.
+- Input is checked against the same JSON schemas as MCP calls. Missing required fields, invalid nulls, unknown JSON fields, and trailing JSON values are rejected before a workbook is changed.
 - By default, workbook paths must be absolute.
 - Use `--rooted` to resolve relative workbook paths under `EXCEL_FILES_PATH`.
 - Tool names match the MCP tool names exactly and are intended to remain stable long-term.
@@ -181,18 +181,23 @@ EOF
 - `cli` mode supports `list-tools --json` for machine-readable discovery, `tool-info [--json] <tool-name>` for per-tool schema and output-example inspection, and `--input -` for stdin-fed JSON payloads.
 - `cli` tool names intentionally match MCP tool names exactly.
 - `create_workbook` protects existing files by default; pass `"overwrite": true` to replace one explicitly.
+- Worksheet creation, copying, and renaming reject names that already belong to another worksheet, including names differing only in letter case.
 - Mutating calls to the same workbook are serialized so concurrent HTTP requests cannot lose updates.
 - `read_data_from_excel` and `filter_rows` return numbers and booleans as JSON primitives and reject duplicate headers instead of silently dropping columns.
 - `copy_range`, `sort_range`, and `delete_range` preserve cell formulas and styles; relative formula references move with their cells.
+- Formula translation supports whole-column and whole-row references, such as `A:A` and `1:3`, as well as absolute references and quoted strings.
 - `describe_workbook` can include table, chart, pivot, named-range, merged-range, and validation metadata.
-- `list_charts` supports workbook-wide listing and optional `source_sheet` filtering.
+- `list_charts` supports workbook-wide listing and optional `source_sheet` filtering, including series that reference multiple sheets. Literal and cached series labels are included when available.
 - `get_sheet_schema` defaults `sample_size` to `3` when omitted.
 - `find_in_workbook` supports `text` and `formula` search types, `contains`, `exact`, and `regex` match modes, optional context, and `max_results`.
+- Search results include `"truncated": true` when additional matches exist beyond `max_results`. Repeated sheet names are searched once, and sparse worksheets are scanned row by row.
 - `filter_rows` is a non-mutating table query tool. Filters are combined with AND semantics.
 - `filter_rows` supports `equals`, `contains`, `gt`, `gte`, `lt`, `lte`, and `regex` operators.
 - `sort_range` accepts header-name or 1-based column-index sort keys, with optional header preservation via `has_header`.
+- Ascending sorts order blank values, numbers, booleans, then text. Descending sorts reverse that order.
 - `upsert_rows` is table-scoped and bounded by the declared range. It updates rows matched by `key_columns` and can append within the same range when `insert_if_missing=true`.
 - `upsert_rows` requires explicit `match` and `values` objects per row, rejects key-column mutation, and fails when multiple existing rows match the same key.
+- Numeric upsert keys use their underlying values regardless of display formatting; rows containing formulas are reserved when appending.
 - `create_chart` supports `line`, `column`, `bar`, `pie`, `doughnut`, `scatter`, and `area`.
 - `create_pivot_table` supports `sum`, `count`, `average`, `avg`, `mean`, `max`, and `min` aggregation inputs.
 - `create_table` requires non-empty, unique header cells.

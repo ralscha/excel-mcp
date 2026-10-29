@@ -47,60 +47,133 @@ func FindInWorkbook(path string, opts FindOptions) (*FindResult, error) {
 	}
 	defer closeWorkbook()
 
-	sheets := opts.Sheets
-	if len(sheets) == 0 {
-		sheets = f.GetSheetList()
+	requestedSheets := opts.Sheets
+	if len(requestedSheets) == 0 {
+		requestedSheets = f.GetSheetList()
 	}
-	result := &FindResult{FilePath: path, Query: opts.Query, SearchType: searchType, MatchMode: matchMode}
-	for _, sheetName := range sheets {
+	sheets := make([]string, 0, len(requestedSheets))
+	seen := make(map[int]bool, len(requestedSheets))
+	for _, sheetName := range requestedSheets {
 		if err := ensureSheetExists(f, sheetName); err != nil {
 			return nil, err
 		}
-		rows, cols, _, err := worksheetBounds(f, sheetName)
+		index, err := f.GetSheetIndex(sheetName)
 		if err != nil {
 			return nil, err
 		}
-		for row := 1; row <= rows; row++ {
-			for col := 1; col <= cols; col++ {
-				cell, err := excelize.CoordinatesToCellName(col, row)
-				if err != nil {
-					return nil, err
-				}
-				match := FindMatch{SheetName: sheetName, Cell: cell}
-				var haystack string
-				if searchType == "formula" {
-					haystack, err = f.GetCellFormula(sheetName, cell)
-					if err != nil {
-						return nil, err
-					}
-					if haystack != "" && !strings.HasPrefix(haystack, "=") {
-						haystack = "=" + haystack
-					}
-					match.Formula = haystack
-				} else {
-					haystack, err = f.GetCellValue(sheetName, cell)
-					if err != nil {
-						return nil, err
-					}
-					match.Value = haystack
-				}
-				if haystack == "" || !matcher(haystack) {
-					continue
-				}
-				if opts.ContextRows > 0 || opts.ContextCols > 0 {
-					match.Context, err = collectContext(f, sheetName, row, col, rows, cols, opts.ContextRows, opts.ContextCols)
-					if err != nil {
-						return nil, err
-					}
-				}
-				result.Matches = append(result.Matches, match)
-				if len(result.Matches) >= maxResults {
-					return result, nil
-				}
-			}
+		if !seen[index] {
+			seen[index] = true
+			sheets = append(sheets, f.GetSheetName(index))
+		}
+	}
+	result := &FindResult{FilePath: path, Query: opts.Query, SearchType: searchType, MatchMode: matchMode, Matches: []FindMatch{}}
+	for _, sheetName := range sheets {
+		if err := findInSheet(f, sheetName, opts, matcher, maxResults, result); err != nil {
+			return nil, err
+		}
+		if result.Truncated {
+			break
 		}
 	}
 	return result, nil
+}
+
+func findInSheet(f *excelize.File, sheetName string, opts FindOptions, matcher func(string) bool, maxResults int, result *FindResult) error {
+	var mergedRanges []mergedSearchRange
+	if result.SearchType == "formula" {
+		mergedCells, err := f.GetMergeCells(sheetName, true)
+		if err != nil {
+			return err
+		}
+		mergedRanges = make([]mergedSearchRange, 0, len(mergedCells))
+		for _, merged := range mergedCells {
+			_, _, startCol, startRow, endCol, endRow, err := normalizeRangeRef(merged.GetStartAxis() + ":" + merged.GetEndAxis())
+			if err != nil {
+				return err
+			}
+			mergedRanges = append(mergedRanges, mergedSearchRange{startCol, startRow, endCol, endRow})
+		}
+	}
+	maxRow, maxCol := 0, 0
+	includeContext := opts.ContextRows > 0 || opts.ContextCols > 0
+	if includeContext {
+		var err error
+		maxRow, maxCol, _, err = worksheetBounds(f, sheetName)
+		if err != nil {
+			return err
+		}
+	}
+	rows, err := f.Rows(sheetName)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	row := 0
+	for rows.Next() {
+		row++
+		values, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+		for index, value := range values {
+			col := index + 1
+			if result.SearchType == "text" && (value == "" || !matcher(value)) {
+				continue
+			}
+			cell, err := excelize.CoordinatesToCellName(col, row)
+			if err != nil {
+				return err
+			}
+			match := FindMatch{SheetName: sheetName, Cell: cell}
+			if result.SearchType == "formula" {
+				// GetCellFormula resolves every merged cell to its anchor. Only
+				// report the anchor, even when a later value fills the row slice.
+				if isMergedSearchContinuation(mergedRanges, row, col) {
+					continue
+				}
+				formula, err := f.GetCellFormula(sheetName, cell)
+				if err != nil {
+					return err
+				}
+				if formula == "" {
+					continue
+				}
+				formula = "=" + strings.TrimPrefix(formula, "=")
+				if !matcher(formula) {
+					continue
+				}
+				match.Formula = formula
+			} else {
+				match.Value = value
+			}
+			if len(result.Matches) == maxResults {
+				result.Truncated = true
+				return nil
+			}
+			if includeContext {
+				match.Context, err = collectContext(f, sheetName, row, col, maxRow, maxCol, opts.ContextRows, opts.ContextCols)
+				if err != nil {
+					return err
+				}
+			}
+			result.Matches = append(result.Matches, match)
+		}
+	}
+	return rows.Error()
+}
+
+type mergedSearchRange struct {
+	startCol, startRow, endCol, endRow int
+}
+
+func isMergedSearchContinuation(ranges []mergedSearchRange, row, col int) bool {
+	for _, merged := range ranges {
+		if row >= merged.startRow && row <= merged.endRow && col >= merged.startCol && col <= merged.endCol &&
+			(row != merged.startRow || col != merged.startCol) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildMatcher(query, matchMode string, caseSensitive bool) (func(string) bool, error) {
@@ -115,27 +188,25 @@ func buildMatcher(query, matchMode string, caseSensitive bool) (func(string) boo
 		}
 		return re.MatchString, nil
 	}
-	return func(haystack string) bool {
-		return matchesSearch(haystack, query, matchMode, caseSensitive)
-	}, nil
-}
-
-func matchesSearch(haystack, needle, matchMode string, caseSensitive bool) bool {
 	if !caseSensitive {
-		haystack = strings.ToLower(haystack)
-		needle = strings.ToLower(needle)
+		query = strings.ToLower(query)
 	}
-	if matchMode == "exact" {
-		return haystack == needle
-	}
-	return strings.Contains(haystack, needle)
+	return func(haystack string) bool {
+		if !caseSensitive {
+			haystack = strings.ToLower(haystack)
+		}
+		if matchMode == "exact" {
+			return haystack == query
+		}
+		return strings.Contains(haystack, query)
+	}, nil
 }
 
 func collectContext(f *excelize.File, sheetName string, row, col, maxRow, maxCol, contextRows, contextCols int) ([]ContextCell, error) {
 	startRow := max(1, row-contextRows)
-	endRow := min(maxRow, row+contextRows)
+	endRow := row + min(contextRows, maxRow-row)
 	startCol := max(1, col-contextCols)
-	endCol := min(maxCol, col+contextCols)
+	endCol := col + min(contextCols, maxCol-col)
 	context := make([]ContextCell, 0)
 	for currentRow := startRow; currentRow <= endRow; currentRow++ {
 		for currentCol := startCol; currentCol <= endCol; currentCol++ {

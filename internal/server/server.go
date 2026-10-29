@@ -61,10 +61,10 @@ func New(cfg Config) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "add_data_validation", Description: "Add a data validation rule to a worksheet range"}, tc.addDataValidation)
 	mcp.AddTool(server, &mcp.Tool{Name: "delete_data_validation", Description: "Delete data validation rules from a worksheet range or sheet"}, tc.deleteDataValidation)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_data_validation_info", Description: "Get data validation rules and metadata for a worksheet"}, tc.getDataValidationInfo)
-	mcp.AddTool(server, &mcp.Tool{Name: "insert_rows", Description: "Insert one or more rows starting at the specified row"}, tc.insertRows)
-	mcp.AddTool(server, &mcp.Tool{Name: "insert_columns", Description: "Insert one or more columns starting at the specified column"}, tc.insertColumns)
-	mcp.AddTool(server, &mcp.Tool{Name: "delete_sheet_rows", Description: "Delete one or more rows starting at the specified row"}, tc.deleteSheetRows)
-	mcp.AddTool(server, &mcp.Tool{Name: "delete_sheet_columns", Description: "Delete one or more columns starting at the specified column"}, tc.deleteSheetColumns)
+	mcp.AddTool(server, &mcp.Tool{Name: "insert_rows", Description: "Insert one or more rows starting at the specified row", InputSchema: countSchema[rowArgs]()}, tc.insertRows)
+	mcp.AddTool(server, &mcp.Tool{Name: "insert_columns", Description: "Insert one or more columns starting at the specified column", InputSchema: countSchema[columnArgs]()}, tc.insertColumns)
+	mcp.AddTool(server, &mcp.Tool{Name: "delete_sheet_rows", Description: "Delete one or more rows starting at the specified row", InputSchema: countSchema[rowArgs]()}, tc.deleteSheetRows)
+	mcp.AddTool(server, &mcp.Tool{Name: "delete_sheet_columns", Description: "Delete one or more columns starting at the specified column", InputSchema: countSchema[columnArgs]()}, tc.deleteSheetColumns)
 	mcp.AddTool(server, &mcp.Tool{Name: "set_column_widths", Description: "Set column widths or auto-fit columns to their content", InputSchema: mustSetColumnWidthsSchema()}, tc.setColumnWidths)
 	mcp.AddTool(server, &mcp.Tool{Name: "set_row_heights", Description: "Set worksheet row heights"}, tc.setRowHeights)
 
@@ -154,7 +154,7 @@ type findInWorkbookArgs struct {
 	Filepath      string   `json:"filepath" jsonschema:"Path to the Excel workbook"`
 	Query         string   `json:"query" jsonschema:"Text or formula fragment to search for"`
 	Sheets        []string `json:"sheets,omitempty" jsonschema:"Optional sheet names to limit the search to"`
-	MatchMode     string   `json:"match_mode,omitempty" jsonschema:"contains or exact"`
+	MatchMode     string   `json:"match_mode,omitempty" jsonschema:"contains, exact, or regex"`
 	SearchType    string   `json:"search_type,omitempty" jsonschema:"text or formula"`
 	CaseSensitive bool     `json:"case_sensitive,omitempty" jsonschema:"Enable case-sensitive matching"`
 	ContextRows   int      `json:"context_rows,omitempty" jsonschema:"Number of surrounding rows to include in each match context"`
@@ -523,14 +523,24 @@ type rowArgs struct {
 	Filepath  string `json:"filepath" jsonschema:"Path to the Excel workbook"`
 	SheetName string `json:"sheet_name" jsonschema:"Name of the worksheet"`
 	StartRow  int    `json:"start_row" jsonschema:"1-based row number to start at"`
-	Count     int    `json:"count,omitempty" jsonschema:"Number of rows to insert or delete (defaults to 1)"`
+	Count     *int   `json:"count,omitempty" jsonschema:"Positive number of rows to insert or delete (defaults to 1 when omitted)"`
 }
 
 type columnArgs struct {
 	Filepath  string `json:"filepath" jsonschema:"Path to the Excel workbook"`
 	SheetName string `json:"sheet_name" jsonschema:"Name of the worksheet"`
 	StartCol  int    `json:"start_col" jsonschema:"1-based column number to start at"`
-	Count     int    `json:"count,omitempty" jsonschema:"Number of columns to insert or delete (defaults to 1)"`
+	Count     *int   `json:"count,omitempty" jsonschema:"Positive number of columns to insert or delete (defaults to 1 when omitted)"`
+}
+
+func countSchema[T any]() *jsonschema.Schema {
+	schema, err := jsonschema.For[T](nil)
+	if err != nil {
+		panic(fmt.Errorf("build row/column count schema: %w", err))
+	}
+	schema.Properties["count"].Type = "integer"
+	schema.Properties["count"].Types = nil
+	return schema
 }
 
 func (tc *toolContext) createWorkbook(_ context.Context, _ *mcp.CallToolRequest, args createWorkbookArgs) (*mcp.CallToolResult, any, error) {
@@ -1116,14 +1126,14 @@ func defaultEndCell(startCell, endCell string) string {
 	return endCell
 }
 
-func positiveCount(count int) (int, error) {
-	if count == 0 {
+func positiveCount(count *int) (int, error) {
+	if count == nil {
 		return 1, nil
 	}
-	if count < 0 {
+	if *count <= 0 {
 		return 0, fmt.Errorf("count must be positive")
 	}
-	return count, nil
+	return *count, nil
 }
 
 func (tc *toolContext) setColumnWidths(_ context.Context, _ *mcp.CallToolRequest, args setColumnWidthsArgs) (*mcp.CallToolResult, any, error) {

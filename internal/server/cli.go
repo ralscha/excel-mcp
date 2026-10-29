@@ -46,6 +46,9 @@ func GetCLITool(name string) (CLITool, bool) {
 }
 
 func RunCLITool(ctx context.Context, cfg Config, toolName string, payload []byte) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	toolName = strings.TrimSpace(toolName)
 	if toolName == "" {
 		return "", fmt.Errorf("tool name is required")
@@ -89,8 +92,8 @@ func cliToolDefs(cfg Config) map[string]cliToolDef {
 		"create_worksheet":         cliTool("create_worksheet", "Create a new worksheet in an existing workbook", tc.createWorksheet, schemaFor[createWorksheetArgs], textExample("Worksheet Summary created in C:\\workbooks\\sales.xlsx")),
 		"delete_range":             cliTool("delete_range", "Delete a range of cells and shift remaining cells", tc.deleteRange, schemaFor[deleteRangeArgs], textExample("Deleted range Sheet1!B2:D4 and shifted cells up")),
 		"delete_data_validation":   cliTool("delete_data_validation", "Delete data validation rules from a worksheet range or sheet", tc.deleteDataValidation, schemaFor[deleteDataValidationArgs], textExample("Deleted data validation from Orders!D2:D200")),
-		"delete_sheet_columns":     cliTool("delete_sheet_columns", "Delete one or more columns starting at the specified column", tc.deleteSheetColumns, schemaFor[columnArgs], textExample("Deleted 2 columns from Sheet1 starting at column 3")),
-		"delete_sheet_rows":        cliTool("delete_sheet_rows", "Delete one or more rows starting at the specified row", tc.deleteSheetRows, schemaFor[rowArgs], textExample("Deleted 3 rows from Sheet1 starting at row 8")),
+		"delete_sheet_columns":     cliTool("delete_sheet_columns", "Delete one or more columns starting at the specified column", tc.deleteSheetColumns, countSchema[columnArgs], textExample("Deleted 2 columns from Sheet1 starting at column 3")),
+		"delete_sheet_rows":        cliTool("delete_sheet_rows", "Delete one or more rows starting at the specified row", tc.deleteSheetRows, countSchema[rowArgs], textExample("Deleted 3 rows from Sheet1 starting at row 8")),
 		"delete_worksheet":         cliTool("delete_worksheet", "Delete a worksheet from a workbook", tc.deleteWorksheet, schemaFor[createWorksheetArgs], textExample("Worksheet Archive deleted from C:\\workbooks\\sales.xlsx")),
 		"describe_workbook":        cliTool("describe_workbook", "Describe the workbook structure and artifacts", tc.describeWorkbook, schemaFor[describeWorkbookArgs], workbookDescriptionExample()),
 		"filter_rows":              cliTool("filter_rows", "Filter tabular rows from a worksheet range", tc.filterRows, schemaFor[filterRowsArgs], filterRowsResultExample()),
@@ -100,8 +103,8 @@ func cliToolDefs(cfg Config) map[string]cliToolDef {
 		"get_merged_cells":         cliTool("get_merged_cells", "Get merged cells in a worksheet", tc.getMergedCells, schemaFor[validationInfoArgs], map[string]any{"sheet_name": "Summary", "merged_ranges": []string{"A1:C1", "D4:E4"}}),
 		"get_sheet_schema":         cliTool("get_sheet_schema", "Infer a worksheet schema and sample values", tc.getSheetSchema, schemaFor[getSheetSchemaArgs], sheetSchemaExample()),
 		"get_workbook_metadata":    cliTool("get_workbook_metadata", "Get workbook metadata, including sheets and ranges", tc.getWorkbookMetadata, schemaFor[metadataArgs], workbookMetadataExample()),
-		"insert_columns":           cliTool("insert_columns", "Insert one or more columns starting at the specified column", tc.insertColumns, schemaFor[columnArgs], textExample("Inserted 2 columns into Sheet1 starting at column 4")),
-		"insert_rows":              cliTool("insert_rows", "Insert one or more rows starting at the specified row", tc.insertRows, schemaFor[rowArgs], textExample("Inserted 1 row into Sheet1 starting at row 5")),
+		"insert_columns":           cliTool("insert_columns", "Insert one or more columns starting at the specified column", tc.insertColumns, countSchema[columnArgs], textExample("Inserted 2 columns into Sheet1 starting at column 4")),
+		"insert_rows":              cliTool("insert_rows", "Insert one or more rows starting at the specified row", tc.insertRows, countSchema[rowArgs], textExample("Inserted 1 row into Sheet1 starting at row 5")),
 		"list_charts":              cliTool("list_charts", "List charts in a worksheet or across a workbook", tc.listCharts, schemaFor[listChartsArgs], listChartsResultExample()),
 		"merge_cells":              cliTool("merge_cells", "Merge a range of cells", tc.mergeCells, schemaFor[rangeArgs], textExample("Merged cells Summary!A1:C1")),
 		"read_data_from_excel":     cliTool("read_data_from_excel", "Read data from an Excel worksheet", tc.readDataFromExcel, schemaFor[readDataArgs], readResultExample()),
@@ -118,10 +121,11 @@ func cliToolDefs(cfg Config) map[string]cliToolDef {
 }
 
 func cliTool[T any](name, description string, handler func(context.Context, *mcp.CallToolRequest, T) (*mcp.CallToolResult, any, error), schemaFn func() *jsonschema.Schema, outputExample any) cliToolDef {
+	schema := schemaFn()
 	return cliToolDef{
-		meta: CLITool{Name: name, Description: description, InputSchema: schemaFn(), OutputExample: outputExample},
+		meta: CLITool{Name: name, Description: description, InputSchema: schema, OutputExample: outputExample},
 		invoke: func(ctx context.Context, payload []byte) (*mcp.CallToolResult, error) {
-			args, err := decodeCLIArgs[T](payload)
+			args, err := decodeCLIArgs[T](payload, schema)
 			if err != nil {
 				return nil, err
 			}
@@ -267,7 +271,7 @@ func dataValidationInfoExample() []map[string]any {
 	}
 }
 
-func decodeCLIArgs[T any](payload []byte) (T, error) {
+func decodeCLIArgs[T any](payload []byte, schema *jsonschema.Schema) (T, error) {
 	var args T
 	trimmed := strings.TrimSpace(string(payload))
 	if trimmed == "" {
@@ -283,6 +287,17 @@ func decodeCLIArgs[T any](payload []byte) (T, error) {
 			err = fmt.Errorf("multiple JSON values are not allowed")
 		}
 		return args, fmt.Errorf("decode tool input: %w", err)
+	}
+	var input any
+	if err := json.Unmarshal([]byte(trimmed), &input); err != nil {
+		return args, fmt.Errorf("decode tool input: %w", err)
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		return args, fmt.Errorf("resolve tool schema: %w", err)
+	}
+	if err := resolved.Validate(input); err != nil {
+		return args, fmt.Errorf("validate tool input: %w", err)
 	}
 	return args, nil
 }

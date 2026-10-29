@@ -63,20 +63,10 @@ func ReadData(path, sheetName, startCell, endCell string, previewOnly bool) (*Re
 		return nil, fmt.Errorf("invalid start_cell: %w", err)
 	}
 
-	rows, err := f.GetRows(sheetName)
-	if err != nil {
+	if err := ensureSheetExists(f, sheetName); err != nil {
 		return nil, err
 	}
-	maxRow := len(rows)
-	maxCol := 0
-	for _, row := range rows {
-		if len(row) > maxCol {
-			maxCol = len(row)
-		}
-	}
-
-	endCol := maxCol
-	endRow := maxRow
+	var endCol, endRow int
 	if endCell != "" {
 		endCol, endRow, err = excelize.CellNameToCoordinates(endCell)
 		if err != nil {
@@ -86,6 +76,11 @@ func ReadData(path, sheetName, startCell, endCell string, previewOnly bool) (*Re
 			return nil, fmt.Errorf("range end must be below and to the right of start_cell")
 		}
 	} else {
+		maxRow, maxCol, err := worksheetDataBounds(f, sheetName)
+		if err != nil {
+			return nil, err
+		}
+		endCol, endRow = maxCol, maxRow
 		endCol = max(endCol, startCol)
 		endRow = max(endRow, startRow)
 	}
@@ -129,7 +124,7 @@ func ReadData(path, sheetName, startCell, endCell string, previewOnly bool) (*Re
 			if err != nil {
 				return nil, err
 			}
-			if displayValue != "" {
+			if jsonComparisonValue(value, displayValue) != "" {
 				empty = false
 			}
 			item[header] = value
@@ -147,6 +142,9 @@ func ApplyFormula(path, sheetName, cell, formula string) (string, error) {
 		return "", err
 	}
 	err := withWorkbook(path, func(f *excelize.File) error {
+		if err := f.SetCellDefault(sheetName, cell, ""); err != nil {
+			return err
+		}
 		return f.SetCellFormula(sheetName, cell, strings.TrimPrefix(formula, "="))
 	})
 	if err != nil {
@@ -163,25 +161,50 @@ func ValidateFormulaSyntax(formula string) error {
 		return fmt.Errorf("formula expression is required after '='")
 	}
 	depth := 0
-	inString := false
+	bracketDepth := 0
+	var quote rune
 	runes := []rune(formula)
 	for index := 1; index < len(runes); index++ {
 		current := runes[index]
-		if current == '"' {
-			if inString && index+1 < len(runes) && runes[index+1] == '"' {
-				index++
-				continue
-			}
-			inString = !inString
-			continue
-		}
 		if unicode.IsControl(current) && current != '\t' && current != '\r' && current != '\n' {
 			return fmt.Errorf("formula contains unsupported control characters")
 		}
-		if inString {
+		if quote != 0 {
+			if current != quote {
+				continue
+			}
+			if index+1 < len(runes) && runes[index+1] == quote {
+				index++
+				continue
+			}
+			quote = 0
+			continue
+		}
+		if bracketDepth > 0 {
+			switch current {
+			case '\'':
+				// Apostrophes escape special characters in structured references.
+				if index+1 < len(runes) {
+					index++
+				}
+			case '[':
+				bracketDepth++
+			case ']':
+				bracketDepth--
+			}
+			continue
+		}
+		if current == '[' {
+			bracketDepth++
+			continue
+		}
+		if current == '"' || current == '\'' {
+			quote = current
 			continue
 		}
 		switch current {
+		case ']':
+			return fmt.Errorf("formula has unbalanced brackets")
 		case '(':
 			depth++
 		case ')':
@@ -191,8 +214,11 @@ func ValidateFormulaSyntax(formula string) error {
 			}
 		}
 	}
-	if inString {
+	if quote != 0 {
 		return fmt.Errorf("formula has unbalanced quotes")
+	}
+	if bracketDepth != 0 {
+		return fmt.Errorf("formula has unbalanced brackets")
 	}
 	if depth != 0 {
 		return fmt.Errorf("formula has unbalanced parentheses")
@@ -219,7 +245,7 @@ func ValidateRange(path, sheetName, startCell, endCell string) (string, error) {
 			return "", fmt.Errorf("range end must be below and to the right of start_cell")
 		}
 	}
-	if _, err := f.GetRows(sheetName); err != nil {
+	if err := ensureSheetExists(f, sheetName); err != nil {
 		return "", err
 	}
 	if endCell == "" {
@@ -334,7 +360,7 @@ func FilterRows(path, sheetName, rangeRef string, opts FilterRowsOptions) (*Filt
 			if err != nil {
 				return nil, err
 			}
-			if value != "" {
+			if jsonComparisonValue(jsonValue, value) != "" {
 				empty = false
 			}
 			item[header] = jsonValue
