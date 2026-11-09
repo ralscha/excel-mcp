@@ -5,8 +5,8 @@ go 1.27.3
 require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/xuri/efp v0.0.2
-	github.com/xuri/excelize/v2 v2.11.1-0.20261003002531-6258dcebc4e2
+	github.com/xuri/efp v0.0.3-0.20260924042702-217b81952dec
+	github.com/xuri/excelize/v2 v2.11.1
 )
 
 require (
