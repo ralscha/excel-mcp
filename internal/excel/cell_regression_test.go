@@ -16,6 +16,8 @@ func TestTranslateFormulaWholeReferencesAndEscapedText(t *testing.T) {
 		{"rows", `SUM(1:1,$2:3,4:$5,$6:$7)`, `SUM(4:4,$2:6,7:$5,$6:$7)`, 2, 3},
 		{"qualified", `SUM('Sales Data'!A:B,'O''Brien'!1:2)`, `SUM('Sales Data'!C:D,'O''Brien'!4:5)`, 2, 3},
 		{"escaped text", `IF(A1="say ""Hi""","A:A","1:1")`, `IF(B2="say ""Hi""","A:A","1:1")`, 1, 1},
+		{"multiple text literals", `A1&""""&"A1"&"a ""quoted"" value"&""`, `B2&""""&"A1"&"a ""quoted"" value"&""`, 1, 1},
+		{"unchanged offset", `A1&""""`, `A1&""""`, 0, 0},
 		{"column underflow", `SUM(A:A)`, `SUM(#REF!)`, -1, 0},
 		{"column overflow", `SUM(XFD:XFD)`, `SUM(#REF!)`, 1, 0},
 		{"row underflow", `SUM(1:1)`, `SUM(#REF!)`, 0, -1},
@@ -28,6 +30,29 @@ func TestTranslateFormulaWholeReferencesAndEscapedText(t *testing.T) {
 				t.Fatalf("translated formula = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestCopyFormulaPreservesEscapedText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "copy-formula-text.xlsx")
+	f := excelize.NewFile()
+	if err := f.SetCellFormula("Sheet1", "B1", `IF(A1="say ""Hi""","A:A","1:1")`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SaveAs(path); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	if _, err := CopyRange(path, "Sheet1", "B1", "B1", "C2", ""); err != nil {
+		t.Fatal(err)
+	}
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if got, err := f.GetCellFormula("Sheet1", "C2"); err != nil || got != `IF(B2="say ""Hi""","A:A","1:1")` {
+		t.Fatalf("copied formula = %q, error = %v", got, err)
 	}
 }
 
