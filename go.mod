@@ -1,12 +1,12 @@
 module excel-mcp
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/xuri/efp v0.0.2
-	github.com/xuri/excelize/v2 v2.11.1-0.20261003002531-6258dcebc4e2
+	github.com/xuri/efp v0.0.3-0.20260924042702-217b81952dec
+	github.com/xuri/excelize/v2 v2.11.1
 )
 
 require (
@@ -17,11 +17,11 @@ require (
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/oauth2 v0.37.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/oauth2 v0.38.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 )
