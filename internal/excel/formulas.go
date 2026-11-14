@@ -22,9 +22,6 @@ func translateFormula(formula string, colDelta, rowDelta int) string {
 	parser.Parse(formula)
 	for index := range parser.Tokens.Items {
 		token := &parser.Tokens.Items[index]
-		if token.TType == efp.TokenTypeOperand && token.TSubType == efp.TokenSubTypeText {
-			token.TValue = strings.ReplaceAll(token.TValue, `"`, `""`)
-		}
 		if token.TType != efp.TokenTypeOperand || token.TSubType != efp.TokenSubTypeRange {
 			continue
 		}
